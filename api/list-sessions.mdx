@@ -1,0 +1,63 @@
+---
+title: 'listSessions'
+description: 'List all active execution sessions in the sandbox'
+---
+
+<Warning>
+  This method is not currently implemented in the SDK. Session tracking is planned for a future release.
+</Warning>
+
+## Planned Method Signature
+
+```typescript
+async listSessions(): Promise<SessionInfo[]>
+```
+
+## Planned Returns
+
+<ResponseField name="SessionInfo[]" type="array">
+  Array of session information objects
+  
+  <Expandable title="SessionInfo properties">
+    <ResponseField name="id" type="string">
+      Unique session identifier
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Session name (if provided)
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="Date">
+      When the session was created
+    </ResponseField>
+    
+    <ResponseField name="cwd" type="string">
+      Current working directory
+    </ResponseField>
+    
+    <ResponseField name="processCount" type="number">
+      Number of active processes in the session
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Workaround
+
+Currently, track sessions manually in your application:
+
+```typescript
+const activeSessions = new Map<string, ExecutionSession>();
+
+// Create and track
+const session = await sandbox.createSession({ id: 'my-session' });
+activeSessions.set(session.id, session);
+
+// Cleanup
+await sandbox.deleteSession('my-session');
+activeSessions.delete('my-session');
+```
+
+## See Also
+
+- [createSession](/api/create-session) - Create a new session
+- [deleteSession](/api/delete-session) - Delete a session

@@ -1,0 +1,127 @@
+---
+title: 'exec'
+description: 'Execute a shell command and wait for completion'
+---
+
+Executes a shell command in the sandbox and waits for it to complete. Returns the full output and exit code.
+
+## Method Signature
+
+```typescript
+await sandbox.exec(
+  command: string,
+  options?: ExecOptions
+): Promise<ExecResult>
+```
+
+## Parameters
+
+<ParamField path="command" type="string" required>
+  Shell command to execute. The command runs in a bash shell with full shell features (pipes, redirects, etc.).
+</ParamField>
+
+<ParamField path="options" type="ExecOptions">
+  Execution options
+
+  <Expandable title="ExecOptions">
+    <ParamField path="timeout" type="number">
+      Maximum execution time in milliseconds. Command is terminated if it exceeds this limit.
+    </ParamField>
+
+    <ParamField path="env" type="Record<string, string>">
+      Environment variables to set for this command only (merged with session environment)
+    </ParamField>
+
+    <ParamField path="cwd" type="string">
+      Working directory for the command. Defaults to the session's current working directory.
+    </ParamField>
+
+    <ParamField path="sessionId" type="string">
+      Session ID to execute in. Uses the default session if not specified.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ExecResult" type="object">
+  <Expandable title="ExecResult fields">
+    <ResponseField name="stdout" type="string">
+      Standard output captured from the command
+    </ResponseField>
+
+    <ResponseField name="stderr" type="string">
+      Standard error output captured from the command
+    </ResponseField>
+
+    <ResponseField name="exitCode" type="number">
+      Exit code from the command (0 typically indicates success)
+    </ResponseField>
+
+    <ResponseField name="success" type="boolean">
+      True if exitCode is 0, false otherwise
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Basic command execution
+
+```typescript
+const result = await sandbox.exec('echo "Hello, World!"');
+console.log(result.stdout); // "Hello, World!\n"
+console.log(result.success); // true
+```
+
+### Command with timeout
+
+```typescript
+try {
+  const result = await sandbox.exec('sleep 10', { timeout: 3000 });
+} catch (error) {
+  console.error('Command timed out after 3 seconds');
+}
+```
+
+### Command with environment variables
+
+```typescript
+const result = await sandbox.exec('echo $MY_VAR', {
+  env: { MY_VAR: 'custom value' }
+});
+console.log(result.stdout); // "custom value\n"
+```
+
+### Command with custom working directory
+
+```typescript
+await sandbox.exec('mkdir -p /workspace/project');
+const result = await sandbox.exec('pwd', {
+  cwd: '/workspace/project'
+});
+console.log(result.stdout); // "/workspace/project\n"
+```
+
+### Running Python code
+
+```typescript
+const result = await sandbox.exec('python3 -c "print(2 + 2)"');
+console.log(result.stdout); // "4\n"
+```
+
+### Error handling
+
+```typescript
+const result = await sandbox.exec('ls /nonexistent');
+if (!result.success) {
+  console.error('Command failed with exit code:', result.exitCode);
+  console.error('Error output:', result.stderr);
+}
+```
+
+## Related Methods
+
+- [execStream](/api/exec-stream) - Stream command output in real-time
+- [execInteractive](/api/exec-interactive) - Interactive command execution with PTY
+- [startProcess](/api/start-process) - Run background processes

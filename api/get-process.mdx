@@ -1,0 +1,130 @@
+---
+title: 'getProcess'
+description: 'Get information about a specific process'
+---
+
+Retrieves detailed information about a specific background process by its ID.
+
+## Method Signature
+
+```typescript
+await sandbox.getProcess(
+  id: string,
+  sessionId?: string
+): Promise<Process | null>
+```
+
+## Parameters
+
+<ParamField path="id" type="string" required>
+  The process ID to retrieve
+</ParamField>
+
+<ParamField path="sessionId" type="string">
+  Optional session ID. If not provided, the default session is used.
+</ParamField>
+
+## Returns
+
+<ResponseField name="Process" type="Process | null">
+  Process object if found, or null if the process doesn't exist
+
+  <Expandable title="Process">
+    <ResponseField name="id" type="string">
+      Unique process identifier
+    </ResponseField>
+
+    <ResponseField name="pid" type="number">
+      System process ID (if available and running)
+    </ResponseField>
+
+    <ResponseField name="command" type="string">
+      Command that was executed
+    </ResponseField>
+
+    <ResponseField name="status" type="ProcessStatus">
+      Current process status: `'starting'` | `'running'` | `'completed'` | `'failed'` | `'killed'` | `'error'`
+    </ResponseField>
+
+    <ResponseField name="startTime" type="Date">
+      When the process was started
+    </ResponseField>
+
+    <ResponseField name="endTime" type="Date">
+      When the process ended (if completed)
+    </ResponseField>
+
+    <ResponseField name="exitCode" type="number">
+      Process exit code (if completed)
+    </ResponseField>
+
+    <ResponseField name="sessionId" type="string">
+      Session ID if provided
+    </ResponseField>
+
+    <ResponseField name="kill" type="(signal?: string) => Promise<void>">
+      Kill the process
+    </ResponseField>
+
+    <ResponseField name="getStatus" type="() => Promise<ProcessStatus>">
+      Get current process status (refreshed)
+    </ResponseField>
+
+    <ResponseField name="getLogs" type="() => Promise<{ stdout: string; stderr: string }>">
+      Get accumulated logs
+    </ResponseField>
+
+    <ResponseField name="waitForLog" type="(pattern: string | RegExp, timeout?: number) => Promise<WaitForLogResult>">
+      Wait for a log pattern to appear in process output
+    </ResponseField>
+
+    <ResponseField name="waitForPort" type="(port: number, options?: WaitForPortOptions) => Promise<void>">
+      Wait for a port to become ready
+    </ResponseField>
+
+    <ResponseField name="waitForExit" type="(timeout?: number) => Promise<WaitForExitResult>">
+      Wait for the process to exit
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Get process by ID
+
+```typescript
+const process = await sandbox.getProcess('dev-server');
+
+if (process) {
+  console.log('Status:', process.status);
+  console.log('Started:', process.startTime);
+} else {
+  console.log('Process not found');
+}
+```
+
+### Check if process is running
+
+```typescript
+const process = await sandbox.getProcess('my-process');
+
+if (process && process.status === 'running') {
+  console.log('Process is running with PID:', process.pid);
+}
+```
+
+### Get exit code of completed process
+
+```typescript
+const process = await sandbox.getProcess('batch-job');
+
+if (process && process.status === 'completed') {
+  console.log('Process completed with exit code:', process.exitCode);
+}
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a new background process
+- [listProcesses](/api/list-processes) - List all processes
+- [killProcess](/api/kill-process) - Kill a running process

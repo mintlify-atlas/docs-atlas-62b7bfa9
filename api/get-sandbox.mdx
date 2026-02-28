@@ -1,0 +1,434 @@
+---
+title: 'getSandbox()'
+description: 'Get a type-safe Sandbox instance from a Durable Object namespace.'
+---
+
+The `getSandbox()` function is the recommended way to obtain a Sandbox instance. It creates a Durable Object stub with proper typing and applies configuration options.
+
+## Signature
+
+```typescript
+function getSandbox<T extends Sandbox<any>>(
+  ns: DurableObjectNamespace<T>,
+  id: string,
+  options?: SandboxOptions
+): T
+```
+
+## Parameters
+
+<ParamField path="ns" type="DurableObjectNamespace<T>" required>
+  Durable Object namespace binding from your environment. Typically accessed as `env.Sandbox` in your Worker.
+</ParamField>
+
+<ParamField path="id" type="string" required>
+  Unique identifier for this sandbox instance. Used as the Durable Object ID.
+  
+  <Warning>
+    IDs containing uppercase letters may cause issues with preview URLs. Use lowercase IDs or enable `normalizeId` option.
+  </Warning>
+</ParamField>
+
+<ParamField path="options" type="SandboxOptions">
+  Optional configuration for the sandbox:
+  
+  <Expandable title="SandboxOptions properties">
+    <ResponseField name="sleepAfter" type="string | number">
+      Duration after which the sandbox sleeps if no requests are received. Can be a string like `"30s"`, `"5m"`, `"1h"` or a number representing seconds. Default: `"10m"` (10 minutes).
+      
+      Ignored when `keepAlive` is `true`.
+    </ResponseField>
+    
+    <ResponseField name="baseUrl" type="string">
+      Base URL for the sandbox API. Used for constructing preview URLs.
+    </ResponseField>
+    
+    <ResponseField name="keepAlive" type="boolean">
+      Keep the container alive indefinitely by preventing automatic shutdown. When `true`, the container never auto-timeouts and must be explicitly destroyed.
+      
+      Use this when activity cannot be automatically detected. You **must** call `sandbox.destroy()` when done to avoid resource leaks.
+      
+      Default: `false`.
+    </ResponseField>
+    
+    <ResponseField name="normalizeId" type="boolean">
+      Normalize sandbox ID to lowercase for preview URL compatibility.
+      
+      Required for preview URLs because hostnames are case-insensitive (RFC 3986), which would route requests to a different Durable Object instance with IDs containing uppercase letters.
+      
+      **Important:** Different `normalizeId` values create different Durable Object instances:
+      - `getSandbox(ns, "MyProject")` → DO key: `"MyProject"`
+      - `getSandbox(ns, "MyProject", {normalizeId: true})` → DO key: `"myproject"`
+      
+      **Future change:** In a future version, this will default to `true` (automatically lowercase all IDs). IDs with uppercase letters will trigger a warning. To prepare, use lowercase IDs or explicitly pass `normalizeId: true`.
+      
+      Default: `false`.
+    </ResponseField>
+    
+    <ResponseField name="containerTimeouts" type="object">
+      Container startup timeout configuration. Tune timeouts based on your container's characteristics.
+      
+      SDK defaults (30s instance, 90s ports) work for most use cases. Adjust for heavy containers or fail-fast applications.
+      
+      Can also be configured via environment variables (see below). Precedence: options > env vars > SDK defaults.
+      
+      <Expandable title="Timeout properties">
+        <ResponseField name="instanceGetTimeoutMS" type="number">
+          Time to wait for container instance provisioning (5000-300000ms).
+          
+          Default: `30000` (30s) or `SANDBOX_INSTANCE_TIMEOUT_MS` env var.
+        </ResponseField>
+        
+        <ResponseField name="portReadyTimeoutMS" type="number">
+          Time to wait for application startup and ports to be ready (10000-600000ms).
+          
+          Default: `90000` (90s) or `SANDBOX_PORT_TIMEOUT_MS` env var.
+        </ResponseField>
+        
+        <ResponseField name="waitIntervalMS" type="number">
+          How often to poll for container readiness (100-5000ms).
+          
+          Default: `1000` (1s) or `SANDBOX_POLL_INTERVAL_MS` env var.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+## Return value
+
+<ResponseField name="sandbox" type="T">
+  Type-safe Sandbox instance (or subclass if using a custom Sandbox class). The returned stub is enhanced with proper terminal and session handling.
+</ResponseField>
+
+## Usage examples
+
+### Basic usage
+
+```typescript
+import { getSandbox, Sandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Get sandbox instance
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+    
+    // Execute command
+    const result = await sandbox.exec('echo "Hello from sandbox"');
+    
+    return new Response(result.stdout);
+  }
+};
+```
+
+### User-scoped sandboxes
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const userId = request.headers.get('X-User-ID');
+    if (!userId) {
+      return new Response('Missing user ID', { status: 401 });
+    }
+    
+    // Each user gets their own sandbox
+    const sandbox = getSandbox(env.Sandbox, `user-${userId}`, {
+      normalizeId: true,  // Ensure lowercase for preview URLs
+      sleepAfter: '30m'   // User sandboxes sleep after 30 minutes
+    });
+    
+    await sandbox.exec('npm install');
+    
+    return new Response('Package installed');
+  }
+};
+```
+
+### Long-running services
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'api-server', {
+      keepAlive: true  // Never auto-timeout
+    });
+    
+    // Start background service
+    const proc = await sandbox.startProcess('npm run serve');
+    await proc.waitForPort(8080);
+    
+    return new Response('API server started');
+  }
+};
+```
+
+### Heavy containers
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'ml-model', {
+      containerTimeouts: {
+        portReadyTimeoutMS: 180_000  // 3 minutes for ML model loading
+      }
+    });
+    
+    const result = await sandbox.exec('python inference.py');
+    
+    return new Response(result.stdout);
+  }
+};
+```
+
+### Fail-fast applications
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'quick-task', {
+      containerTimeouts: {
+        instanceGetTimeoutMS: 15_000,  // 15 seconds
+        portReadyTimeoutMS: 30_000      // 30 seconds
+      }
+    });
+    
+    const result = await sandbox.exec('node script.js');
+    
+    return new Response(result.stdout);
+  }
+};
+```
+
+### Custom Sandbox class
+
+```typescript
+import { getSandbox, Sandbox } from '@cloudflare/sandbox';
+
+// Extend Sandbox with custom methods
+class CustomSandbox extends Sandbox {
+  async deployApp() {
+    await this.exec('npm install');
+    await this.exec('npm run build');
+    return this.startProcess('npm start');
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Type-safe custom sandbox
+    const sandbox = getSandbox<CustomSandbox>(env.Sandbox, 'custom');
+    
+    // Use custom method
+    await sandbox.deployApp();
+    
+    return new Response('App deployed');
+  }
+};
+
+export { CustomSandbox as Sandbox };
+```
+
+## ID normalization
+
+The `normalizeId` option controls how sandbox IDs are processed:
+
+```typescript
+// Without normalization (default)
+const sandbox1 = getSandbox(env.Sandbox, 'MyProject');
+// DO key: "MyProject"
+// Preview URLs may not work correctly
+
+// With normalization
+const sandbox2 = getSandbox(env.Sandbox, 'MyProject', { normalizeId: true });
+// DO key: "myproject" 
+// Preview URLs work correctly
+
+// These are DIFFERENT Durable Objects!
+// sandbox1 and sandbox2 do not share state
+```
+
+<Warning>
+  Changing `normalizeId` for an existing sandbox ID creates a **new** Durable Object instance with no shared state. Always use the same normalization setting for a given sandbox ID.
+</Warning>
+
+## Container timeout configuration
+
+Timeout configuration follows this precedence (highest to lowest):
+
+1. `getSandbox()` options (runtime)
+2. Environment variables (deployment config)
+3. SDK defaults (built-in)
+
+### Via options (highest priority)
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'id', {
+  containerTimeouts: {
+    instanceGetTimeoutMS: 20_000,
+    portReadyTimeoutMS: 60_000,
+    waitIntervalMS: 500
+  }
+});
+```
+
+### Via environment variables
+
+Set in `wrangler.toml`:
+
+```toml
+[env.production.vars]
+SANDBOX_INSTANCE_TIMEOUT_MS = "20000"
+SANDBOX_PORT_TIMEOUT_MS = "60000"
+SANDBOX_POLL_INTERVAL_MS = "500"
+```
+
+### SDK defaults (fallback)
+
+Used when no configuration is provided:
+
+- `instanceGetTimeoutMS`: 30,000ms (30 seconds)
+- `portReadyTimeoutMS`: 90,000ms (90 seconds)
+- `waitIntervalMS`: 1,000ms (1 second)
+
+## Best practices
+
+### Choose meaningful IDs
+
+Use descriptive, unique IDs that make it easy to identify sandbox purposes:
+
+```typescript
+// Good: Clear purpose
+getSandbox(env.Sandbox, `user-${userId}-workspace`)
+getSandbox(env.Sandbox, `build-${projectId}`)
+getSandbox(env.Sandbox, `test-runner-${testId}`)
+
+// Avoid: Generic or ambiguous
+getSandbox(env.Sandbox, 'sandbox1')
+getSandbox(env.Sandbox, 'temp')
+```
+
+### Always use lowercase IDs
+
+Prevent preview URL issues by using lowercase IDs:
+
+```typescript
+// Best: Lowercase by default
+const sandbox = getSandbox(env.Sandbox, 'my-project');
+
+// Alternative: Normalize uppercase IDs
+const userId = request.headers.get('X-User-ID'); // May be uppercase
+const sandbox = getSandbox(env.Sandbox, `user-${userId}`, {
+  normalizeId: true  // Handles uppercase safely
+});
+```
+
+### Configure timeouts for your workload
+
+Adjust timeouts based on container startup time:
+
+```typescript
+// Heavy ML models or large apps
+const mlSandbox = getSandbox(env.Sandbox, 'ml-inference', {
+  containerTimeouts: { portReadyTimeoutMS: 180_000 }  // 3 minutes
+});
+
+// Lightweight scripts
+const scriptSandbox = getSandbox(env.Sandbox, 'quick-task', {
+  containerTimeouts: { portReadyTimeoutMS: 30_000 }  // 30 seconds
+});
+```
+
+### Clean up long-running sandboxes
+
+Always destroy sandboxes when using `keepAlive: true`:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'worker', {
+  keepAlive: true
+});
+
+try {
+  await sandbox.startProcess('npm run serve');
+  // ... use sandbox ...
+} finally {
+  // Clean up resources
+  await sandbox.destroy();
+}
+```
+
+## Common patterns
+
+### Request-scoped sandboxes
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    const sandboxId = url.searchParams.get('sandbox');
+    
+    if (!sandboxId) {
+      return new Response('Missing sandbox ID', { status: 400 });
+    }
+    
+    const sandbox = getSandbox(env.Sandbox, sandboxId, {
+      normalizeId: true
+    });
+    
+    // Sandbox automatically sleeps after inactivity
+    const result = await sandbox.exec(url.searchParams.get('cmd') || 'ls');
+    
+    return new Response(result.stdout);
+  }
+};
+```
+
+### Scheduled task sandboxes
+
+```typescript
+export default {
+  async scheduled(event: ScheduledEvent, env: Env): Promise<void> {
+    // Create fresh sandbox for this task
+    const sandbox = getSandbox(env.Sandbox, `task-${event.scheduledTime}`);
+    
+    try {
+      await sandbox.exec('npm run daily-report');
+    } finally {
+      // Clean up immediately after task
+      await sandbox.destroy();
+    }
+  }
+};
+```
+
+### Multi-tenant sandboxes
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const tenantId = request.headers.get('X-Tenant-ID');
+    
+    // Each tenant gets isolated sandbox
+    const sandbox = getSandbox(env.Sandbox, `tenant-${tenantId}`, {
+      normalizeId: true,
+      sleepAfter: '1h'  // Longer for active tenants
+    });
+    
+    await sandbox.exec('node api-handler.js');
+    
+    return new Response('Request processed');
+  }
+};
+```
+
+## See also
+
+- [Sandbox class](/api/sandbox) - Complete API reference for Sandbox methods
+- [proxyToSandbox()](/api/proxy-to-sandbox) - Handle preview URL routing

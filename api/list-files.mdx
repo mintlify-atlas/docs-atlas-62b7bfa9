@@ -1,0 +1,205 @@
+---
+title: listFiles
+description: List files and directories in a path
+---
+
+## Description
+
+Lists all files and directories in the specified path. Supports recursive listing and filtering of hidden files.
+
+## Method Signature
+
+```typescript
+async listFiles(
+  path: string,
+  options?: { recursive?: boolean; includeHidden?: boolean }
+): Promise<ListFilesResult>
+```
+
+## Parameters
+
+<ParamField path="path" type="string" required>
+  Absolute path to the directory to list
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration for the listing operation
+  
+  <ParamField path="recursive" type="boolean" default={false}>
+    Whether to list files recursively in subdirectories
+  </ParamField>
+  
+  <ParamField path="includeHidden" type="boolean" default={false}>
+    Whether to include hidden files (those starting with '.')
+  </ParamField>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ListFilesResult" type="object">
+  Result of the list operation
+  
+  <ResponseField name="success" type="boolean">
+    Whether the listing was successful
+  </ResponseField>
+  
+  <ResponseField name="path" type="string">
+    Path that was listed
+  </ResponseField>
+  
+  <ResponseField name="files" type="FileInfo[]">
+    Array of file and directory information
+    
+    <ResponseField name="name" type="string">
+      Name of the file or directory
+    </ResponseField>
+    
+    <ResponseField name="absolutePath" type="string">
+      Absolute path to the file or directory
+    </ResponseField>
+    
+    <ResponseField name="relativePath" type="string">
+      Path relative to the listed directory
+    </ResponseField>
+    
+    <ResponseField name="type" type="'file' | 'directory' | 'symlink' | 'other'">
+      Type of the entry
+    </ResponseField>
+    
+    <ResponseField name="size" type="number">
+      Size in bytes (0 for directories)
+    </ResponseField>
+    
+    <ResponseField name="modifiedAt" type="string">
+      ISO 8601 timestamp of last modification
+    </ResponseField>
+    
+    <ResponseField name="mode" type="string">
+      Unix file mode (e.g., '0644')
+    </ResponseField>
+    
+    <ResponseField name="permissions" type="object">
+      File permissions
+      
+      <ResponseField name="readable" type="boolean">
+        Whether the file is readable
+      </ResponseField>
+      
+      <ResponseField name="writable" type="boolean">
+        Whether the file is writable
+      </ResponseField>
+      
+      <ResponseField name="executable" type="boolean">
+        Whether the file is executable
+      </ResponseField>
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="count" type="number">
+    Total number of files and directories found
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="string">
+    ISO 8601 timestamp of when the operation completed
+  </ResponseField>
+  
+  <ResponseField name="exitCode" type="number">
+    Exit code from the underlying list command (0 = success)
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### List files in a directory
+
+```typescript
+const result = await sandbox.listFiles('/workspace');
+console.log(`Found ${result.count} items`);
+
+for (const file of result.files) {
+  console.log(`${file.name} (${file.type}) - ${file.size} bytes`);
+}
+```
+
+### Recursive listing
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  recursive: true
+});
+
+// Find all Python files
+const pythonFiles = result.files.filter(
+  file => file.type === 'file' && file.name.endsWith('.py')
+);
+console.log(`Found ${pythonFiles.length} Python files`);
+```
+
+### Include hidden files
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  includeHidden: true
+});
+
+// Find .git directory
+const gitDir = result.files.find(
+  file => file.name === '.git' && file.type === 'directory'
+);
+```
+
+### Check file permissions
+
+```typescript
+const result = await sandbox.listFiles('/workspace');
+
+for (const file of result.files) {
+  if (file.type === 'file') {
+    console.log(`${file.name}:`);
+    console.log(`  Readable: ${file.permissions.readable}`);
+    console.log(`  Writable: ${file.permissions.writable}`);
+    console.log(`  Executable: ${file.permissions.executable}`);
+  }
+}
+```
+
+### Calculate directory size
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  recursive: true
+});
+
+const totalSize = result.files
+  .filter(f => f.type === 'file')
+  .reduce((sum, f) => sum + f.size, 0);
+
+console.log(`Total size: ${totalSize} bytes`);
+```
+
+## Error Handling
+
+The method throws an error if:
+- The directory does not exist
+- The path is not a directory
+- Insufficient permissions to read the directory
+
+```typescript
+try {
+  const result = await sandbox.listFiles('/nonexistent');
+} catch (error) {
+  console.error('Failed to list files:', error.message);
+}
+```
+
+## Notes
+
+- Symbolic links are identified but not followed
+- The `recursive` option can be slow for large directory trees
+- Hidden files (starting with '.') are excluded by default
+
+## See Also
+
+- [mkdir](/api/mkdir) - Create directories
+- [readFile](/api/read-file) - Read file contents
+- [exists](/api/list-files) - Check if a path exists

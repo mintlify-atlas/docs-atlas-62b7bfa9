@@ -1,0 +1,384 @@
+---
+title: Collaborative terminal sharing
+description: Build real-time collaborative terminal experiences with WebSockets and presence
+---
+
+Create real-time terminal sharing applications where multiple users can interact with the same shell session simultaneously. Like Google Docs, but for your terminal.
+
+## Overview
+
+This example demonstrates:
+
+- Real-time terminal sharing with multiple participants
+- WebSocket-based terminal connections using xterm.js
+- Presence system showing who's in the room
+- Session isolation so different rooms don't interfere
+- Live room discovery and joining
+
+## Architecture
+
+The example uses three Durable Objects working together:
+
+```
+Browser (xterm.js + SandboxAddon)
+    |
+    |-- /ws/room/:id -----> Room DO         Presence, user list, typing
+    |
+    \-- /ws/terminal/:sessionId
+            |
+            v
+        Sandbox DO <---> Container PTY    Direct WebSocket passthrough
+            |
+RoomRegistry DO                           Tracks active rooms globally
+```
+
+### Terminal connection
+
+The browser connects directly to the sandbox container's PTY through a WebSocket that the SDK proxies transparently. There's no JSON protocol for terminal I/O — raw bytes flow between xterm.js and the container's PTY via `SandboxAddon`.
+
+### Room connection
+
+A separate WebSocket to the Room DO handles presence (joins, leaves, typing indicators). This keeps the collaboration layer decoupled from terminal I/O.
+
+## Implementation
+
+### Server-side setup
+
+#### Worker routing
+
+Route WebSocket connections to the appropriate Durable Object:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Terminal WebSocket: proxy directly to sandbox session's PTY
+    if (url.pathname.startsWith('/ws/terminal/')) {
+      const sessionId = url.pathname.split('/')[3];
+      const sandbox = getSandbox(env.Sandbox, 'shared-terminal');
+      const session = await sandbox.getSession(sessionId);
+      return session.terminal(request);
+    }
+
+    // Room WebSocket: handle presence and user list
+    if (url.pathname.startsWith('/ws/room/')) {
+      const roomId = url.pathname.split('/')[3];
+      const id = env.ROOM.idFromName(roomId);
+      const room = env.ROOM.get(id);
+      return room.fetch(request);
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+};
+```
+
+#### Session isolation
+
+Each room gets its own session in the sandbox:
+
+```typescript
+// Map room ID to session ID
+const sessionId = `room-${roomId}`;
+
+// All users in the same room connect to the same session
+const sandbox = getSandbox(env.Sandbox, 'shared-terminal');
+const session = await sandbox.getSession(sessionId);
+
+// Session provides isolated shell environment
+return session.terminal(request);
+```
+
+This ensures different rooms get isolated shell environments within the same sandbox container.
+
+### Client-side setup
+
+#### Terminal component
+
+Use `SandboxAddon` from `@cloudflare/sandbox/xterm` to connect the terminal:
+
+```typescript
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { SandboxAddon } from '@cloudflare/sandbox/xterm';
+import '@xterm/xterm/css/xterm.css';
+
+function TerminalComponent({ roomId }: { roomId: string }) {
+  const terminalRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  useEffect(() => {
+    if (!terminalRef.current) return;
+
+    // Create terminal instance
+    const terminal = new Terminal({
+      cursorBlink: true,
+      fontSize: 14,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      theme: {
+        background: '#1e1e1e',
+        foreground: '#d4d4d4'
+      }
+    });
+
+    // Add fit addon for responsive sizing
+    const fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+
+    // Add sandbox addon for WebSocket connection
+    const sandboxAddon = new SandboxAddon({
+      getWebSocketUrl: ({ origin, sessionId }) =>
+        `${origin}/ws/terminal/${sessionId}`,
+      onStateChange: (newState) => setState(newState)
+    });
+    terminal.loadAddon(sandboxAddon);
+
+    // Open terminal in DOM
+    terminal.open(terminalRef.current);
+    fitAddon.fit();
+
+    // Connect to sandbox session
+    const sessionId = `room-${roomId}`;
+    sandboxAddon.connect({
+      sandboxId: 'shared-terminal',
+      sessionId
+    });
+
+    // Handle window resize
+    const handleResize = () => fitAddon.fit();
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      terminal.dispose();
+    };
+  }, [roomId]);
+
+  return (
+    <div>
+      <div className="terminal-status">
+        Status: {state}
+      </div>
+      <div ref={terminalRef} className="terminal-container" />
+    </div>
+  );
+}
+```
+
+#### Presence hook
+
+Track users in the room:
+
+```typescript
+import { useEffect, useState } from 'react';
+
+interface User {
+  id: string;
+  name: string;
+  color: string;
+}
+
+function usePresence(roomId: string) {
+  const [users, setUsers] = useState<User[]>([]);
+  const [isTyping, setIsTyping] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const ws = new WebSocket(
+      `${location.origin.replace('http', 'ws')}/ws/room/${roomId}`
+    );
+
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+
+      switch (message.type) {
+        case 'user-joined':
+          setUsers((prev) => [...prev, message.user]);
+          break;
+        case 'user-left':
+          setUsers((prev) => prev.filter((u) => u.id !== message.userId));
+          break;
+        case 'user-typing':
+          setIsTyping((prev) => new Set([...prev, message.userId]));
+          setTimeout(() => {
+            setIsTyping((prev) => {
+              const next = new Set(prev);
+              next.delete(message.userId);
+              return next;
+            });
+          }, 3000);
+          break;
+        case 'user-list':
+          setUsers(message.users);
+          break;
+      }
+    };
+
+    return () => ws.close();
+  }, [roomId]);
+
+  return { users, isTyping };
+}
+```
+
+### Room management
+
+#### Room Durable Object
+
+Manage connected users and presence:
+
+```typescript
+export class Room extends DurableObject {
+  private users: Map<string, { name: string; color: string; ws: WebSocket }> = new Map();
+
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('Expected WebSocket', { status: 400 });
+    }
+
+    const { 0: client, 1: server } = new WebSocketPair();
+    const userId = crypto.randomUUID();
+    const userName = generateRandomName();
+    const userColor = generateRandomColor();
+
+    this.users.set(userId, {
+      name: userName,
+      color: userColor,
+      ws: server
+    });
+
+    // Notify all users about the new user
+    this.broadcast({
+      type: 'user-joined',
+      user: { id: userId, name: userName, color: userColor }
+    });
+
+    // Send current user list to the new user
+    server.send(JSON.stringify({
+      type: 'user-list',
+      users: Array.from(this.users.entries()).map(([id, data]) => ({
+        id,
+        name: data.name,
+        color: data.color
+      }))
+    }));
+
+    server.addEventListener('close', () => {
+      this.users.delete(userId);
+      this.broadcast({
+        type: 'user-left',
+        userId
+      });
+    });
+
+    server.accept();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private broadcast(message: any) {
+    const data = JSON.stringify(message);
+    for (const { ws } of this.users.values()) {
+      ws.send(data);
+    }
+  }
+}
+```
+
+## Features
+
+- **Shared Terminal**: Every participant sees the same PTY output in real-time
+- **Room System**: Create rooms, share links, browse and join active rooms
+- **Presence Indicators**: See who's in the room with colored avatars
+- **Typing Notifications**: See when other users are typing
+- **Session Isolation**: Each room gets its own sandbox session
+- **Live Room List**: Homepage updates in real-time as rooms are created or emptied
+
+## Setup and deployment
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    npm install @cloudflare/sandbox @xterm/xterm @xterm/addon-fit
+    ```
+  </Step>
+  
+  <Step title="Run locally">
+    ```bash
+    npm run dev
+    ```
+    
+    Open http://localhost:5173, create a room, and share the link.
+  </Step>
+  
+  <Step title="Deploy to production">
+    ```bash
+    npm run deploy
+    ```
+    
+    <Note>
+      After first deployment, wait 2-3 minutes for container provisioning before making requests.
+    </Note>
+  </Step>
+</Steps>
+
+## Use cases
+
+- **Pair Programming**: Share a terminal session for remote collaboration
+- **Educational Platforms**: Instructor-led coding sessions
+- **DevOps Dashboards**: Shared command execution for teams
+- **Interview Platforms**: Technical interviews with live coding
+- **Support Tools**: Remote debugging and assistance
+
+## Key concepts
+
+### WebSocket passthrough
+
+The terminal connection is a direct WebSocket to the container's PTY. The SDK handles all the protocol details:
+
+- Raw byte streaming between xterm.js and PTY
+- Automatic reconnection on disconnect
+- Resize events when terminal dimensions change
+- No custom protocol or message parsing needed
+
+### Session persistence
+
+Sessions maintain state across connections:
+
+- Working directory persists
+- Environment variables persist
+- Running processes continue
+- Command history is maintained
+
+### Multi-user coordination
+
+All users in a room share:
+
+- The same terminal output
+- The same working directory
+- The same environment
+- The same running processes
+
+Input from any user appears in all connected terminals.
+
+## Tips
+
+<Tip>
+  Use the `X-Session-Id` header to associate WebSocket connections with specific rooms. This enables proper session isolation.
+</Tip>
+
+<Tip>
+  Implement rate limiting on room creation to prevent abuse. Consider requiring authentication for production deployments.
+</Tip>
+
+<Warning>
+  This example allows any user to execute any command in shared sessions. Implement proper access controls and security measures for production use.
+</Warning>
+
+## Related resources
+
+- [Terminal API reference](/guides/exposing-ports)
+- [WebSocket guide](/guides/exposing-ports)
+- [xterm.js documentation](https://xtermjs.org/)
+- [Durable Objects documentation](https://developers.cloudflare.com/durable-objects/)

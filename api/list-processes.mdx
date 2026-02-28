@@ -1,0 +1,98 @@
+---
+title: 'listProcesses'
+description: 'List all background processes in the sandbox'
+---
+
+Returns a list of all background processes in the sandbox, including running, completed, and failed processes.
+
+## Method Signature
+
+```typescript
+await sandbox.listProcesses(
+  sessionId?: string
+): Promise<Process[]>
+```
+
+## Parameters
+
+<ParamField path="sessionId" type="string">
+  Optional session ID. If not provided, the default session is used.
+</ParamField>
+
+## Returns
+
+<ResponseField name="processes" type="Process[]">
+  Array of Process objects
+
+  <Expandable title="Process">
+    <ResponseField name="id" type="string">
+      Unique process identifier
+    </ResponseField>
+
+    <ResponseField name="pid" type="number">
+      System process ID (if available and running)
+    </ResponseField>
+
+    <ResponseField name="command" type="string">
+      Command that was executed
+    </ResponseField>
+
+    <ResponseField name="status" type="ProcessStatus">
+      Current process status: `'starting'` | `'running'` | `'completed'` | `'failed'` | `'killed'` | `'error'`
+    </ResponseField>
+
+    <ResponseField name="startTime" type="Date">
+      When the process was started
+    </ResponseField>
+
+    <ResponseField name="endTime" type="Date">
+      When the process ended (if completed)
+    </ResponseField>
+
+    <ResponseField name="exitCode" type="number">
+      Process exit code (if completed)
+    </ResponseField>
+
+    <ResponseField name="sessionId" type="string">
+      Session ID if provided
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### List all processes
+
+```typescript
+const processes = await sandbox.listProcesses();
+
+for (const process of processes) {
+  console.log(`${process.id}: ${process.command} (${process.status})`);
+}
+```
+
+### Filter running processes
+
+```typescript
+const processes = await sandbox.listProcesses();
+const running = processes.filter(p => p.status === 'running');
+
+console.log(`${running.length} processes running`);
+```
+
+### Check process status
+
+```typescript
+const processes = await sandbox.listProcesses();
+const server = processes.find(p => p.command.includes('server'));
+
+if (server && server.status === 'running') {
+  console.log('Server is running');
+}
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a new background process
+- [getProcess](/api/get-process) - Get information about a specific process
+- [killProcess](/api/kill-process) - Kill a running process

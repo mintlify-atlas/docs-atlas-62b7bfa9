@@ -1,0 +1,179 @@
+---
+title: 'runCodeStream'
+description: 'Execute code and get a raw ReadableStream of execution events'
+---
+
+Executes code and returns a raw ReadableStream for custom event processing. Lower-level alternative to `runCode` for advanced use cases.
+
+## Method Signature
+
+```typescript
+async runCodeStream(
+  code: string,
+  options?: RunCodeOptions
+): Promise<ReadableStream>
+```
+
+## Parameters
+
+<ParamField path="code" type="string" required>
+  The code to execute
+</ParamField>
+
+<ParamField path="options" type="RunCodeOptions" optional>
+  Execution options (same as runCode, but callbacks are ignored)
+  
+  <Expandable title="properties">
+    <ParamField path="context" type="CodeContext" optional>
+      Context to run the code in. If not provided, uses default context for the language.
+    </ParamField>
+    
+    <ParamField path="language" type="'python' | 'javascript' | 'typescript'" default="'python'">
+      Language to use if context is not provided
+    </ParamField>
+    
+    <ParamField path="envVars" type="Record<string, string | undefined>" optional>
+      Environment variables for this execution
+    </ParamField>
+    
+    <ParamField path="timeout" type="number" default={60000}>
+      Execution timeout in milliseconds
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ReadableStream" type="ReadableStream<Uint8Array>">
+  A stream of Server-Sent Events (SSE) with execution data
+</ResponseField>
+
+## SSE Event Format
+
+The stream emits SSE events with the following types:
+
+```typescript
+interface StreamingEvent {
+  type: 'result' | 'stdout' | 'stderr' | 'error' | 'execution_complete';
+  
+  // For 'stdout' and 'stderr'
+  text?: string;
+  timestamp?: number;
+  
+  // For 'result'
+  html?: string;
+  png?: string; // base64
+  jpeg?: string; // base64
+  svg?: string;
+  latex?: string;
+  markdown?: string;
+  json?: unknown;
+  chart?: ChartData;
+  
+  // For 'error'
+  ename?: string;
+  evalue?: string;
+  traceback?: string[];
+  lineNumber?: number;
+  
+  // For 'execution_complete'
+  execution_count?: number;
+}
+```
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+const stream = await sandbox.runCodeStream(`
+import time
+for i in range(5):
+    print(f"Count: {i}")
+    time.sleep(0.5)
+`);
+
+// Process SSE events manually
+const reader = stream.getReader();
+const decoder = new TextDecoder();
+let buffer = '';
+
+while (true) {
+  const { done, value } = await reader.read();
+  
+  if (done) break;
+  
+  buffer += decoder.decode(value, { stream: true });
+  
+  // Split on newlines
+  const lines = buffer.split('\n');
+  buffer = lines.pop() || '';
+  
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    
+    const jsonStr = line.substring(6);
+    const event = JSON.parse(jsonStr);
+    
+    switch (event.type) {
+      case 'stdout':
+        console.log('Output:', event.text);
+        break;
+      case 'stderr':
+        console.error('Error:', event.text);
+        break;
+      case 'result':
+        if (event.chart) {
+          console.log('Chart received:', event.chart.type);
+        }
+        break;
+      case 'error':
+        console.error('Execution error:', event.evalue);
+        break;
+      case 'execution_complete':
+        console.log('Execution complete');
+        break;
+    }
+  }
+}
+```
+
+## Example: Streaming to Response
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env) {
+    const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+    
+    const stream = await sandbox.runCodeStream(
+      request.json().code,
+      { language: 'python' }
+    );
+    
+    // Stream directly to client
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+      }
+    });
+  }
+};
+```
+
+## Notes
+
+- Returns raw SSE stream for maximum flexibility
+- Use `runCode()` for automatic result parsing and accumulation
+- Useful for proxying execution to clients or custom processing
+- Stream format follows Server-Sent Events specification
+- Events are JSON-encoded in `data:` fields
+- Context is automatically created if not provided
+
+## See Also
+
+- [runCode](/api/code-interpreter/run-code) - Higher-level execution with parsed results
+- [createCodeContext](/api/code-interpreter/create-context) - Create execution context

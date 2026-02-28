@@ -1,0 +1,161 @@
+---
+title: 'CodeContext'
+description: 'Represents an isolated code execution context for the code interpreter'
+---
+
+Represents an execution context for running Python, JavaScript, or TypeScript code. Each context maintains independent state and execution history.
+
+## Type Definition
+
+```typescript
+interface CodeContext {
+  readonly id: string;
+  readonly language: string;
+  readonly cwd: string;
+  readonly createdAt: Date;
+  readonly lastUsed: Date;
+}
+```
+
+## Properties
+
+<ResponseField name="id" type="string" required>
+  Unique identifier for the context (e.g., "ctx_abc123...")
+</ResponseField>
+
+<ResponseField name="language" type="string" required>
+  Programming language of the context: `"python"`, `"javascript"`, or `"typescript"`
+</ResponseField>
+
+<ResponseField name="cwd" type="string" required>
+  Current working directory for code execution
+</ResponseField>
+
+<ResponseField name="createdAt" type="Date" required>
+  Timestamp when the context was created
+</ResponseField>
+
+<ResponseField name="lastUsed" type="Date" required>
+  Timestamp when the context was last used for code execution
+</ResponseField>
+
+## Example Usage
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create a Python context
+const context = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/analysis'
+});
+
+console.log('Context ID:', context.id);
+console.log('Language:', context.language);
+console.log('Working dir:', context.cwd);
+console.log('Created:', context.createdAt.toISOString());
+
+// Use the context
+await sandbox.runCode('import pandas as pd', { context });
+await sandbox.runCode('df = pd.read_csv("data.csv")', { context });
+
+// Context maintains state between executions
+await sandbox.runCode('print(df.head())', { context });
+```
+
+## Example: Context Isolation
+
+```typescript
+// Create separate contexts for different tasks
+const analysisContext = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/analysis'
+});
+
+const visualizationContext = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/viz'
+});
+
+// Set up analysis context
+await sandbox.runCode(
+  'import pandas as pd\ndf = pd.read_csv("data.csv")',
+  { context: analysisContext }
+);
+
+// Set up visualization context
+await sandbox.runCode(
+  'import matplotlib.pyplot as plt',
+  { context: visualizationContext }
+);
+
+// Contexts are isolated - variables don't leak
+await sandbox.runCode('print(df)', { context: analysisContext }); // Works
+await sandbox.runCode('print(df)', { context: visualizationContext }); // Error: df not defined
+```
+
+## Example: Multi-User Contexts
+
+```typescript
+// Create isolated contexts for different users
+const contexts = new Map<string, CodeContext>();
+
+async function getUserContext(userId: string) {
+  if (!contexts.has(userId)) {
+    const context = await sandbox.createCodeContext({
+      language: 'python',
+      cwd: `/workspace/users/${userId}`
+    });
+    contexts.set(userId, context);
+  }
+  return contexts.get(userId)!;
+}
+
+// Each user gets their own isolated context
+const user1Context = await getUserContext('user-1');
+const user2Context = await getUserContext('user-2');
+
+await sandbox.runCode('x = 42', { context: user1Context });
+await sandbox.runCode('x = 99', { context: user2Context });
+
+const result1 = await sandbox.runCode('print(x)', { context: user1Context });
+console.log(result1.logs.stdout); // ["42"]
+
+const result2 = await sandbox.runCode('print(x)', { context: user2Context });
+console.log(result2.logs.stdout); // ["99"]
+```
+
+## Example: Context Cleanup
+
+```typescript
+// List and clean up old contexts
+const contexts = await sandbox.listCodeContexts();
+const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+for (const context of contexts) {
+  if (context.lastUsed < oneHourAgo) {
+    console.log(`Deleting unused context ${context.id}`);
+    await sandbox.deleteCodeContext(context.id);
+  }
+}
+```
+
+## Notes
+
+- Contexts are isolated - variables and imports in one context don't affect others
+- Each context has its own execution history and state
+- Contexts persist until explicitly deleted or sandbox is destroyed
+- Multiple contexts can exist simultaneously
+- Use the same context for related executions to maintain state
+- Different languages require different contexts
+- Working directory affects file operations within code
+- Contexts consume memory - delete unused contexts
+
+## See Also
+
+- [createCodeContext](/api/code-interpreter/create-context) - Create a new context
+- [runCode](/api/code-interpreter/run-code) - Execute code in a context
+- [listCodeContexts](/api/code-interpreter/list-contexts) - List all contexts
+- [deleteCodeContext](/api/code-interpreter/delete-context) - Delete a context

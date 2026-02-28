@@ -1,0 +1,95 @@
+---
+title: 'listCodeContexts'
+description: 'List all active code execution contexts in the sandbox'
+---
+
+Retrieves a list of all code execution contexts currently active in the sandbox.
+
+## Method Signature
+
+```typescript
+async listCodeContexts(): Promise<CodeContext[]>
+```
+
+## Parameters
+
+This method takes no parameters.
+
+## Returns
+
+<ResponseField name="CodeContext[]" type="array">
+  Array of code execution contexts
+  
+  <Expandable title="CodeContext properties">
+    <ResponseField name="id" type="string" required>
+      Unique identifier for the context
+    </ResponseField>
+    
+    <ResponseField name="language" type="string" required>
+      Programming language of the context
+    </ResponseField>
+    
+    <ResponseField name="cwd" type="string" required>
+      Current working directory
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="Date" required>
+      When the context was created
+    </ResponseField>
+    
+    <ResponseField name="lastUsed" type="Date" required>
+      When the context was last used
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create some contexts
+await sandbox.createCodeContext({ language: 'python' });
+await sandbox.createCodeContext({ language: 'javascript' });
+
+// List all contexts
+const contexts = await sandbox.listCodeContexts();
+
+for (const context of contexts) {
+  console.log(`Context ${context.id}:`);
+  console.log(`  Language: ${context.language}`);
+  console.log(`  Working directory: ${context.cwd}`);
+  console.log(`  Created: ${context.createdAt.toISOString()}`);
+  console.log(`  Last used: ${context.lastUsed.toISOString()}`);
+}
+```
+
+## Example: Cleanup Old Contexts
+
+```typescript
+const contexts = await sandbox.listCodeContexts();
+const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+// Delete contexts not used in the last hour
+for (const context of contexts) {
+  if (context.lastUsed < oneHourAgo) {
+    await sandbox.deleteCodeContext(context.id);
+    console.log(`Deleted unused context ${context.id}`);
+  }
+}
+```
+
+## Notes
+
+- Returns all contexts regardless of language
+- Contexts are ordered by creation time (oldest first)
+- Each context maintains independent state
+- Use this to audit resource usage or implement cleanup policies
+
+## See Also
+
+- [createCodeContext](/api/code-interpreter/create-context) - Create a new context
+- [deleteCodeContext](/api/code-interpreter/delete-context) - Delete a context
+- [CodeContext type](/api/types/code-context) - Type reference

@@ -1,80 +1,329 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Build your first Cloudflare Sandbox application in 5 minutes
 ---
 
-## Get started in three steps
+This quickstart guide walks you through creating a simple Worker that executes code and manages files in a sandbox.
 
-Get your documentation site running locally and make your first customization.
+## Create your project
 
-### Step 1: Set up your local environment
+Create a new project using the minimal template:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+```bash
+npm create cloudflare@latest -- my-sandbox --template=cloudflare/sandbox-sdk/examples/minimal
+cd my-sandbox
+```
 
-### Step 2: Deploy your changes
+## Understanding the code
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Open `src/index.ts` to see the Worker code:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+```typescript src/index.ts
+import { getSandbox } from '@cloudflare/sandbox';
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+export { Sandbox } from '@cloudflare/sandbox';
 
-### Step 3: Go live
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    // Get or create a sandbox instance
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+    // Execute a shell command
+    if (url.pathname === '/run') {
+      const result = await sandbox.exec('echo "2 + 2 = $((2 + 2))"');
+      return Response.json({
+        output: result.stdout,
+        error: result.stderr,
+        exitCode: result.exitCode,
+        success: result.success
+      });
+    }
+
+    // Work with files
+    if (url.pathname === '/file') {
+      await sandbox.writeFile('/workspace/hello.txt', 'Hello, Sandbox!');
+      const file = await sandbox.readFile('/workspace/hello.txt');
+      return Response.json({
+        content: file.content
+      });
+    }
+
+    return new Response('Try /run or /file');
+  }
+};
+```
+
+Let's break down the key parts:
+
+### Import the SDK
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+export { Sandbox } from '@cloudflare/sandbox';
+```
+
+- `getSandbox()` creates or retrieves a sandbox instance
+- The `export { Sandbox }` line is required to export the Durable Object class
+
+### Get a sandbox instance
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+```
+
+- First argument: The Durable Object namespace from your environment bindings
+- Second argument: A unique ID for this sandbox (determines which container to use)
+
+<Tip>
+Use different IDs to create isolated sandboxes. For example, use user IDs to give each user their own sandbox: `getSandbox(env.Sandbox, userId)`
+</Tip>
+
+### Execute commands
+
+```typescript
+const result = await sandbox.exec('echo "2 + 2 = $((2 + 2))"');
+```
+
+The `exec()` method runs shell commands and returns:
+- `stdout`: Standard output from the command
+- `stderr`: Standard error output
+- `exitCode`: The exit code (0 for success)
+- `success`: Boolean indicating if the command succeeded
+
+### Work with files
+
+```typescript
+await sandbox.writeFile('/workspace/hello.txt', 'Hello, Sandbox!');
+const file = await sandbox.readFile('/workspace/hello.txt');
+```
+
+- `writeFile()` creates or overwrites a file
+- `readFile()` returns file metadata and contents
+- Files persist across requests to the same sandbox
+
+## Run locally
+
+Start the development server:
+
+```bash
+npm run dev
+```
+
+<Warning>
+The first run builds the Docker container (2-3 minutes). Subsequent runs are much faster.
+</Warning>
+
+Once running, test the endpoints:
+
+<CodeGroup>
+```bash Execute a command
+curl http://localhost:8787/run
+```
+
+```bash File operations
+curl http://localhost:8787/file
+```
+</CodeGroup>
+
+You should see:
+
+```json Response from /run
+{
+  "output": "2 + 2 = 4\n",
+  "error": "",
+  "exitCode": 0,
+  "success": true
+}
+```
+
+```json Response from /file
+{
+  "content": "Hello, Sandbox!"
+}
+```
+
+## Try Python code execution
+
+Modify your Worker to execute Python code. Add this endpoint:
+
+```typescript src/index.ts
+// Add this to your fetch handler
+if (url.pathname === '/python') {
+  const code = 'print(f"The answer is {2 + 2}")';
+  const result = await sandbox.exec(`python3 -c "${code}"`);
+  return Response.json({
+    output: result.stdout,
+    success: result.success
+  });
+}
+```
+
+Test it:
+
+```bash
+curl http://localhost:8787/python
+```
+
+```json
+{
+  "output": "The answer is 4\n",
+  "success": true
+}
+```
+
+## Try the code interpreter
+
+For a better Python experience, use the `CodeInterpreter` class:
+
+```typescript src/index.ts
+import { getSandbox, CodeInterpreter } from '@cloudflare/sandbox';
+
+// ... existing code ...
+
+if (url.pathname === '/interpreter') {
+  const interpreter = new CodeInterpreter(sandbox);
+  
+  const result = await interpreter.runCode('python', {
+    code: `
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 2*np.pi, 100)
+y = np.sin(x)
+
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.savefig('/tmp/plot.png')
+print('Plot saved!')
+    `.trim()
+  });
+  
+  return Response.json({
+    output: result.stdout,
+    images: result.images,  // Array of generated images
+    success: result.success
+  });
+}
+```
+
+The `CodeInterpreter` class:
+- Captures printed output
+- Detects and returns generated images
+- Provides rich execution context
+- Handles common data science workflows
+
+## Deploy to production
+
+When you're ready to deploy:
+
+```bash
+npx wrangler deploy
+```
+
+<Warning>
+After first deployment, wait 2-3 minutes for container provisioning before making requests.
+</Warning>
+
+Your Worker will be deployed to Cloudflare's global network at:
+
+```
+https://my-sandbox.<your-subdomain>.workers.dev
+```
+
+## Common patterns
+
+### Execute with timeout
+
+```typescript
+const result = await sandbox.exec('sleep 10', {
+  timeout: 5000  // Kill after 5 seconds
+});
+```
+
+### Stream command output
+
+```typescript
+const stream = await sandbox.exec('long-running-command', {
+  stream: true
+});
+
+for await (const event of stream) {
+  if (event.type === 'stdout') {
+    console.log('Output:', event.data);
+  }
+}
+```
+
+### Work with sessions
+
+```typescript
+// Create an isolated session with custom environment
+const session = await sandbox.createSession({
+  env: { MY_VAR: 'custom-value' },
+  cwd: '/workspace/project'
+});
+
+// Commands in this session use the custom environment
+const result = await sandbox.exec('echo $MY_VAR', {
+  sessionId: session.id
+});
+```
+
+### Check if files exist
+
+```typescript
+const files = await sandbox.listFiles('/workspace');
+const exists = files.some(f => f.path === '/workspace/hello.txt');
+```
+
+### Read binary files
+
+```typescript
+const file = await sandbox.readFile('/workspace/image.png');
+const buffer = Buffer.from(file.content, 'base64');
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="API reference" icon="book" href="/api-reference">
+    Explore all available methods and options
+  </Card>
+  <Card title="Execute commands" icon="terminal" href="/guides/executing-commands">
+    Learn advanced command execution patterns
+  </Card>
+  <Card title="Manage files" icon="folder" href="/guides/managing-files">
+    Work with files and directories
+  </Card>
+  <Card title="Examples" icon="code" href="/examples">
+    See real-world applications
+  </Card>
 </CardGroup>
 
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Docker build takes a long time">
+    The first build downloads and configures the base image (2-3 minutes). Subsequent builds are cached and much faster. If you're using a custom Dockerfile, keep layers minimal to improve build times.
+  </Accordion>
+  
+  <Accordion title="Connection refused errors">
+    Make sure Docker is running locally. On first deployment to production, wait 2-3 minutes for container provisioning.
+  </Accordion>
+  
+  <Accordion title="Commands timeout">
+    The default timeout is 30 seconds. For longer operations, increase the timeout:
+    ```typescript
+    await sandbox.exec('long-command', { timeout: 60000 })
+    ```
+  </Accordion>
+  
+  <Accordion title="Files disappear between requests">
+    Files persist within the same sandbox ID. If you're using different IDs (or not specifying one), you'll get different containers. Use consistent IDs:
+    ```typescript
+    const sandbox = getSandbox(env.Sandbox, 'my-persistent-sandbox');
+    ```
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,127 @@
+---
+title: 'ExecResult'
+description: 'Result type returned by command execution methods'
+---
+
+Represents the result of a command execution, including output, exit code, and timing information.
+
+## Type Definition
+
+```typescript
+interface ExecResult {
+  success: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  command: string;
+  duration: number;
+  timestamp: string;
+  sessionId?: string;
+}
+```
+
+## Properties
+
+<ResponseField name="success" type="boolean" required>
+  Whether the command succeeded (exitCode === 0)
+</ResponseField>
+
+<ResponseField name="exitCode" type="number" required>
+  Process exit code. 0 indicates success, non-zero indicates failure.
+</ResponseField>
+
+<ResponseField name="stdout" type="string" required>
+  Standard output content from the command
+</ResponseField>
+
+<ResponseField name="stderr" type="string" required>
+  Standard error content from the command
+</ResponseField>
+
+<ResponseField name="command" type="string" required>
+  Command that was executed
+</ResponseField>
+
+<ResponseField name="duration" type="number" required>
+  Execution duration in milliseconds
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp when command started
+</ResponseField>
+
+<ResponseField name="sessionId" type="string" optional>
+  Session ID if the command was executed in a specific session
+</ResponseField>
+
+## Example Usage
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+const result = await sandbox.exec('ls -la /workspace');
+
+// Check success
+if (result.success) {
+  console.log('Command succeeded');
+  console.log('Output:', result.stdout);
+} else {
+  console.error('Command failed with exit code:', result.exitCode);
+  console.error('Error:', result.stderr);
+}
+
+// Access metadata
+console.log('Command:', result.command);
+console.log('Duration:', result.duration, 'ms');
+console.log('Started at:', result.timestamp);
+```
+
+## Example: Error Handling
+
+```typescript
+const result = await sandbox.exec('npm install');
+
+if (!result.success) {
+  throw new Error(
+    `npm install failed (exit code ${result.exitCode}): ${result.stderr}`
+  );
+}
+
+// Installation succeeded
+console.log('Installed packages:', result.stdout);
+```
+
+## Example: Performance Monitoring
+
+```typescript
+const result = await sandbox.exec('heavy-computation.sh');
+
+console.log(`Command took ${result.duration}ms`);
+
+if (result.duration > 5000) {
+  console.warn('Command took longer than 5 seconds');
+}
+
+// Log to monitoring system
+await logMetric('command_duration', {
+  command: result.command,
+  duration: result.duration,
+  success: result.success
+});
+```
+
+## Notes
+
+- `success` is a convenience property derived from `exitCode`
+- Empty stdout/stderr are represented as empty strings, not null
+- Duration includes command execution time only, not parsing or network overhead
+- Timestamp is in ISO 8601 format (e.g., "2024-01-15T10:30:00.000Z")
+- Large outputs are fully captured (no truncation)
+- Use streaming for real-time output processing
+
+## See Also
+
+- [exec](/api/exec) - Execute commands
+- [execStream](/api/exec-stream) - Stream command output
+- [Process](/api/types/process) - Background process type

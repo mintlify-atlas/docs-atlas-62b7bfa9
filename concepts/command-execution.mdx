@@ -1,0 +1,263 @@
+---
+title: Command execution
+description: How the SDK executes shell commands and manages execution contexts
+---
+
+## Overview
+
+The Sandbox SDK provides two primary patterns for command execution, each optimized for different use cases:
+
+<CardGroup cols={2}>
+  <Card title="Foreground execution" icon="terminal">
+    Run commands synchronously with state persistence. Shell changes (cd, export, functions) affect subsequent commands.
+  </Card>
+  <Card title="Background execution" icon="play">
+    Stream output in real-time with process control. Commands run asynchronously and can be killed.
+  </Card>
+</CardGroup>
+
+## Foreground execution
+
+Use `exec()` for commands where you need the complete result and want state changes to persist:
+
+```typescript
+const result = await sandbox.exec('cd /workspace && export MY_VAR=hello');
+
+// The working directory and env var persist
+const result2 = await sandbox.exec('echo $MY_VAR'); // Output: "hello"
+const result3 = await sandbox.exec('pwd'); // Output: "/workspace"
+```
+
+### Execution result
+
+Every `exec()` call returns an `ExecResult`:
+
+```typescript
+interface ExecResult {
+  success: boolean;      // true if exitCode === 0
+  exitCode: number;      // Process exit code
+  stdout: string;        // Standard output
+  stderr: string;        // Standard error
+  command: string;       // Command that was executed
+  duration: number;      // Execution time in milliseconds
+  timestamp: string;     // ISO timestamp when started
+  sessionId?: string;    // Session ID if using sessions
+}
+```
+
+### Execution options
+
+Control command behavior with options:
+
+```typescript
+const result = await sandbox.exec('python train.py', {
+  // Maximum execution time
+  timeout: 30000, // 30 seconds
+  
+  // Working directory
+  cwd: '/workspace/ml',
+  
+  // Environment variables (temporary for this command only)
+  env: {
+    MODEL_PATH: '/models/latest',
+    DEBUG: 'true'
+  },
+  
+  // Text encoding
+  encoding: 'utf8',
+  
+  // Abort signal for cancellation
+  signal: abortController.signal
+});
+```
+
+<Note>
+Environment variables passed in `env` only apply to that specific command. They don't persist in the session. Use `setEnvVars()` for persistent environment changes.
+</Note>
+
+### Streaming output
+
+Get real-time output from long-running commands:
+
+```typescript
+const result = await sandbox.exec('npm install', {
+  stream: true,
+  onOutput: (stream, data) => {
+    if (stream === 'stdout') {
+      console.log('OUT:', data);
+    } else {
+      console.error('ERR:', data);
+    }
+  },
+  onComplete: (result) => {
+    console.log('Command finished:', result.exitCode);
+  },
+  onError: (error) => {
+    console.error('Execution failed:', error);
+  }
+});
+```
+
+## Background execution
+
+Use `startProcess()` for long-running commands that need process control:
+
+```typescript
+const process = await sandbox.startProcess('python server.py --port 8000', {
+  processId: 'web-server',
+  onOutput: (stream, data) => {
+    console.log(`[${stream}]`, data);
+  },
+  onExit: (code) => {
+    console.log('Server exited with code:', code);
+  }
+});
+
+// Wait for server to be ready
+await process.waitForPort(8000);
+
+// Later: kill the process
+await process.kill();
+```
+
+See the [Processes](/concepts/processes) guide for detailed process management.
+
+## How execution works
+
+The SDK uses different bash patterns for foreground vs background execution:
+
+### Foreground pattern
+
+Commands run in the main shell using group commands to preserve state:
+
+```bash
+# Execute in current shell (state persists)
+{
+  cd /workspace
+  export VAR=value
+  echo $VAR
+} >stdout.tmp 2>stderr.tmp
+echo $? > exit.code
+```
+
+This ensures:
+- Working directory changes persist
+- Environment variables persist
+- Shell functions persist
+- Output is reliably separated
+
+### Background pattern
+
+Commands run in subshells with FIFOs for streaming:
+
+```bash
+# Execute in subshell (isolated, non-blocking)
+(
+  command args
+) >stdout.pipe 2>stderr.pipe &
+PID=$!
+```
+
+This enables:
+- Real-time output streaming
+- Process cancellation via PID
+- Concurrent command execution
+- Non-blocking execution
+
+<Info>
+State changes in background processes (cd, export) don't affect the main shell or other processes.
+</Info>
+
+## Stream separation
+
+The container runtime separates stdout and stderr using binary prefixes:
+
+| Stream | Prefix | Hex |
+|--------|--------|-----|
+| stdout | `\x01\x01\x01` | 010101 |
+| stderr | `\x02\x02\x02` | 020202 |
+
+Each output line is prefixed, allowing the SDK to reconstruct separate streams from merged log files. This approach:
+- Works with any output content (including binary)
+- Preserves line ordering across streams
+- Minimizes collision probability
+
+## Command timeouts
+
+Set execution time limits to prevent hanging:
+
+```typescript
+try {
+  const result = await sandbox.exec('sleep 100', {
+    timeout: 5000 // 5 seconds
+  });
+} catch (error) {
+  // TimeoutError: Command execution timed out after 5000ms
+}
+```
+
+<Warning>
+Timeouts apply to command execution only. Container startup has separate timeouts configured via `containerTimeouts`.
+</Warning>
+
+## Working directories
+
+All commands execute relative to the session's working directory:
+
+```typescript
+// Change working directory (persists in session)
+await sandbox.exec('cd /workspace/projects');
+
+// Or specify per-command
+await sandbox.exec('ls -la', {
+  cwd: '/workspace/data'
+});
+```
+
+The default working directory is `/workspace`.
+
+## Error handling
+
+Commands with non-zero exit codes don't throw errors by default. Check the result:
+
+```typescript
+const result = await sandbox.exec('test -f missing.txt');
+
+if (!result.success) {
+  console.error('Command failed:', result.stderr);
+  console.error('Exit code:', result.exitCode);
+}
+```
+
+For commands that should throw on failure:
+
+```typescript
+const result = await sandbox.exec('critical-operation');
+if (!result.success) {
+  throw new Error(`Command failed: ${result.stderr}`);
+}
+```
+
+## Client architecture
+
+Execution flows through the client layer:
+
+```
+Sandbox.exec()
+    ↓
+CommandClient.execute()
+    ↓
+HTTP POST /api/execute
+    ↓
+Container Shell Session
+    ↓
+ExecResult
+```
+
+The `CommandClient` handles:
+- HTTP communication with retry logic
+- Error response parsing
+- Streaming via Server-Sent Events
+- Callback invocation
+
+See the [Sessions](/concepts/sessions) guide for execution context isolation.

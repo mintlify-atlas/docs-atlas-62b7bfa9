@@ -1,0 +1,434 @@
+---
+title: Code interpreter
+description: High-level API for executing Python and JavaScript with structured outputs
+---
+
+## Overview
+
+The Code Interpreter provides a high-level API for running Python, JavaScript, and TypeScript code with structured execution contexts. It's designed for:
+
+- Interactive code execution (REPL-like)
+- Notebook-style workflows
+- Data science and ML tasks
+- Dynamic code evaluation
+
+Unlike raw command execution, the interpreter manages execution contexts, captures rich results (text, charts, errors), and provides structured output.
+
+## Quick start
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'ml-project');
+
+// Run Python code
+const execution = await sandbox.runCode(`
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.savefig('output.png')
+
+print(f'Generated {len(x)} points')
+`, {
+  language: 'python'
+});
+
+// Access results
+console.log('stdout:', execution.logs.stdout);
+if (execution.error) {
+  console.error('Error:', execution.error.message);
+}
+```
+
+## Execution contexts
+
+Contexts maintain state across multiple code executions:
+
+```typescript
+// Create a context
+const context = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/notebooks'
+});
+
+// Run code in the context
+const exec1 = await sandbox.runCode('x = 42', {
+  context,
+  language: 'python'
+});
+
+const exec2 = await sandbox.runCode('print(x)', {
+  context,
+  language: 'python'
+});
+// Output: 42 (variable persists)
+```
+
+### Context lifecycle
+
+```typescript
+// List all contexts
+const contexts = await sandbox.listCodeContexts();
+
+for (const ctx of contexts) {
+  console.log(`Context ${ctx.id}: ${ctx.language}`);
+}
+
+// Delete a context
+await sandbox.deleteCodeContext(context.id);
+```
+
+## Supported languages
+
+### Python
+
+Python 3.11 with pre-installed libraries:
+
+```typescript
+const execution = await sandbox.runCode(`
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+
+# Your data science code here
+df = pd.DataFrame({'x': [1, 2, 3], 'y': [2, 4, 6]})
+print(df.describe())
+`, {
+  language: 'python'
+});
+```
+
+**Available packages**:
+- `numpy` - Numerical computing
+- `pandas` - Data manipulation
+- `matplotlib` - Plotting and visualization
+- `ipython` - Interactive Python features
+- Standard library (requests, json, etc.)
+
+### JavaScript
+
+Node.js 20 LTS runtime:
+
+```typescript
+const execution = await sandbox.runCode(`
+const data = [1, 2, 3, 4, 5];
+const sum = data.reduce((a, b) => a + b, 0);
+console.log('Sum:', sum);
+`, {
+  language: 'javascript'
+});
+```
+
+### TypeScript
+
+TypeScript with automatic transpilation:
+
+```typescript
+const execution = await sandbox.runCode(`
+interface Point {
+  x: number;
+  y: number;
+}
+
+const p: Point = { x: 10, y: 20 };
+console.log('Point:', p);
+`, {
+  language: 'typescript'
+});
+```
+
+## Execution results
+
+The `Execution` object provides structured access to results:
+
+```typescript
+interface Execution {
+  code: string;              // Code that was executed
+  context: CodeContext;      // Execution context
+  results: Result[];         // Structured results (text, charts, etc.)
+  logs: {
+    stdout: string[];        // Standard output lines
+    stderr: string[];        // Standard error lines
+  };
+  error?: ExecutionError;    // Error if execution failed
+}
+```
+
+### Result types
+
+Execution can produce multiple types of results:
+
+```typescript
+interface Result {
+  type: 'text' | 'image' | 'chart' | 'html' | 'json';
+  data: any;               // Result data (format depends on type)
+  metadata?: Record<string, any>;
+}
+```
+
+**Example with multiple results**:
+
+```typescript
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+import json
+
+# Generate a chart
+plt.plot([1, 2, 3], [1, 4, 9])
+plt.savefig('chart.png')
+
+# Output JSON
+data = {'status': 'success', 'points': 3}
+print(json.dumps(data))
+
+# Regular output
+print('Computation complete')
+`, {
+  language: 'python'
+});
+
+// Access different result types
+for (const result of execution.results) {
+  if (result.type === 'image') {
+    console.log('Chart saved:', result.data);
+  } else if (result.type === 'json') {
+    console.log('JSON result:', result.data);
+  }
+}
+
+// Access logs
+console.log('Output:', execution.logs.stdout.join('\n'));
+```
+
+## Streaming execution
+
+For long-running code, stream results as they're generated:
+
+```typescript
+const stream = await sandbox.runCodeStream(`
+import time
+
+for i in range(10):
+    print(f'Step {i}')
+    time.sleep(1)
+`, {
+  language: 'python'
+});
+
+// Parse SSE stream
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    console.log('Output:', event.data);
+  } else if (event.type === 'result') {
+    console.log('Result:', event.data);
+  } else if (event.type === 'error') {
+    console.error('Error:', event.data);
+  }
+}
+```
+
+### Stream callbacks
+
+Use callbacks for easier streaming:
+
+```typescript
+const execution = await sandbox.runCode(code, {
+  language: 'python',
+  onStdout: (output) => {
+    console.log('OUT:', output.text);
+  },
+  onStderr: (output) => {
+    console.error('ERR:', output.text);
+  },
+  onResult: (result) => {
+    if (result.type === 'image') {
+      console.log('Image generated:', result.data);
+    }
+  },
+  onError: (error) => {
+    console.error('Execution failed:', error.message);
+  }
+});
+```
+
+## Error handling
+
+Execution errors are captured in the result:
+
+```typescript
+const execution = await sandbox.runCode(`
+import non_existent_module
+`, {
+  language: 'python'
+});
+
+if (execution.error) {
+  console.error('Error:', execution.error.message);
+  console.error('Traceback:', execution.error.traceback);
+  console.error('Type:', execution.error.type); // e.g., 'ModuleNotFoundError'
+}
+```
+
+```typescript
+interface ExecutionError {
+  message: string;          // Error message
+  type: string;            // Error type (e.g., 'SyntaxError')
+  traceback?: string;      // Stack trace (Python) or stack (JavaScript)
+  line?: number;           // Line number where error occurred
+}
+```
+
+## Common patterns
+
+### Data analysis workflow
+
+```typescript
+// Create context for data analysis
+const context = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/data'
+});
+
+// Load data
+await sandbox.runCode(`
+import pandas as pd
+df = pd.read_csv('input.csv')
+print(f'Loaded {len(df)} rows')
+`, { context });
+
+// Process data
+await sandbox.runCode(`
+df['normalized'] = (df['value'] - df['value'].mean()) / df['value'].std()
+df.to_csv('output.csv', index=False)
+`, { context });
+
+// Visualize
+await sandbox.runCode(`
+import matplotlib.pyplot as plt
+plt.hist(df['normalized'], bins=30)
+plt.savefig('distribution.png')
+`, { context });
+
+// Download results
+const result = await sandbox.readFile('/workspace/data/output.csv');
+```
+
+### Interactive notebook
+
+```typescript
+// Create persistent context
+const notebook = await sandbox.createCodeContext({
+  language: 'python'
+});
+
+// Execute cells
+const cells = [
+  'import numpy as np',
+  'x = np.array([1, 2, 3, 4, 5])',
+  'mean = x.mean()',
+  'print(f"Mean: {mean}")'
+];
+
+for (const cell of cells) {
+  const exec = await sandbox.runCode(cell, { context: notebook });
+  console.log('Cell output:', exec.logs.stdout);
+}
+```
+
+### Safe code evaluation
+
+```typescript
+try {
+  const execution = await sandbox.runCode(userCode, {
+    language: 'python',
+    timeout: 30000  // 30 second limit
+  });
+  
+  if (execution.error) {
+    return Response.json({
+      success: false,
+      error: execution.error.message
+    });
+  }
+  
+  return Response.json({
+    success: true,
+    output: execution.logs.stdout,
+    results: execution.results
+  });
+} catch (error) {
+  // Timeout or other errors
+  return Response.json({
+    success: false,
+    error: 'Execution timed out or failed'
+  }, { status: 500 });
+}
+```
+
+## Architecture
+
+The Code Interpreter is built on top of the sandbox's command execution:
+
+```
+CodeInterpreter.runCode()
+    ↓
+InterpreterClient.runCodeStream()
+    ↓
+HTTP POST /api/interpreter/run
+    ↓
+Container Interpreter Service
+    ↓
+Language Runtime (Python/Node.js)
+    ↓
+Structured Results
+```
+
+Key components:
+- **CodeInterpreter**: High-level SDK class
+- **InterpreterClient**: HTTP client for interpreter API
+- **Container Service**: Manages language runtimes and contexts
+- **Result Parser**: Extracts structured outputs from execution
+
+## Context vs session
+
+Code contexts are different from execution sessions:
+
+| Feature | Code Context | Execution Session |
+|---------|--------------|-------------------|
+| Purpose | Code state (variables, imports) | Shell state (cwd, env) |
+| Language-specific | Yes | No |
+| Isolation | Per-context | Per-session |
+| Use case | REPL, notebooks | Command execution |
+
+You can use both together:
+
+```typescript
+// Create session
+const session = await sandbox.createSession({
+  cwd: '/workspace/ml'
+});
+
+// Create code context in that session
+const context = await session.createCodeContext({
+  language: 'python'
+});
+
+// Run code in both contexts
+await session.runCode('import numpy as np', { context });
+```
+
+## Limitations
+
+- **Package installation**: Pre-installed packages only (cannot pip install at runtime)
+- **Output size**: Large outputs may be truncated
+- **Execution time**: Consider timeouts for long-running code
+- **Concurrency**: Multiple contexts can run in parallel but share container resources
+
+<Tip>
+For custom package requirements, use `exec()` with `pip install` or modify the container Dockerfile.
+</Tip>

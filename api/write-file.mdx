@@ -1,0 +1,133 @@
+---
+title: writeFile
+description: Write content to a file in the sandbox
+---
+
+## Description
+
+Writes content to a file in the sandbox filesystem. Creates the file if it doesn't exist, or overwrites it if it does.
+
+## Method Signature
+
+```typescript
+async writeFile(
+  path: string,
+  content: string,
+  options?: { encoding?: string; sessionId?: string }
+): Promise<WriteFileResult>
+```
+
+## Parameters
+
+<ParamField path="path" type="string" required>
+  Absolute path where the file should be written
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  Content to write to the file
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration for the write operation
+  
+  <ParamField path="encoding" type="string">
+    Encoding to use for writing the file (e.g., 'utf-8', 'base64')
+  </ParamField>
+  
+  <ParamField path="sessionId" type="string">
+    Session ID to use for this operation. If not provided, the default session is used.
+  </ParamField>
+</ParamField>
+
+## Returns
+
+<ResponseField name="WriteFileResult" type="object">
+  Result of the write operation
+  
+  <ResponseField name="success" type="boolean">
+    Whether the file was written successfully
+  </ResponseField>
+  
+  <ResponseField name="path" type="string">
+    Path to the file that was written
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="string">
+    ISO 8601 timestamp of when the operation completed
+  </ResponseField>
+  
+  <ResponseField name="exitCode" type="number">
+    Exit code from the underlying write command (0 = success)
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Write a text file
+
+```typescript
+const result = await sandbox.writeFile(
+  '/workspace/hello.txt',
+  'Hello, Sandbox!'
+);
+console.log(result.success); // true
+```
+
+### Write JSON data
+
+```typescript
+const data = { name: 'John', age: 30 };
+await sandbox.writeFile(
+  '/workspace/data.json',
+  JSON.stringify(data, null, 2)
+);
+```
+
+### Write with custom encoding
+
+```typescript
+const base64Image = 'iVBORw0KGgoAAAANSUhEUgAAAAUA...';
+await sandbox.writeFile('/workspace/image.png', base64Image, {
+  encoding: 'base64'
+});
+```
+
+### Write to a specific session
+
+```typescript
+const session = await sandbox.createSession();
+await sandbox.writeFile('/workspace/session-file.txt', 'Session data', {
+  sessionId: session.id
+});
+```
+
+## Error Handling
+
+The method throws an error if:
+- The parent directory does not exist (use [mkdir](/api/mkdir) first)
+- The file cannot be written due to permissions
+- The path is invalid
+- Disk space is insufficient
+
+```typescript
+try {
+  await sandbox.writeFile('/nonexistent/file.txt', 'content');
+} catch (error) {
+  console.error('Failed to write file:', error.message);
+  // Create directory first
+  await sandbox.mkdir('/nonexistent', { recursive: true });
+  await sandbox.writeFile('/nonexistent/file.txt', 'content');
+}
+```
+
+## Notes
+
+- If the file already exists, it will be overwritten
+- Parent directories must exist (use `mkdir` with `recursive: true` to create them)
+- File permissions are set to default (typically 644)
+
+## See Also
+
+- [readFile](/api/read-file) - Read content from a file
+- [mkdir](/api/mkdir) - Create directories
+- [deleteFile](/api/remove-file) - Delete a file

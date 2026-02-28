@@ -1,0 +1,711 @@
+---
+title: Error handling and retry behavior
+description: Understanding error types, retry logic, and error recovery patterns in Cloudflare Sandbox SDK
+---
+
+## Overview
+
+The SDK provides structured error handling with type-safe error classes, automatic retry logic for transient failures, and detailed error context for debugging.
+
+## Error hierarchy
+
+All SDK errors extend `SandboxError` and include structured context:
+
+```typescript
+try {
+  await sandbox.exec('cat /nonexistent');
+} catch (error) {
+  if (error instanceof FileNotFoundError) {
+    console.error('File not found:', error.path);
+    console.error('Suggestion:', error.suggestion);
+    console.error('HTTP Status:', error.httpStatus);
+  }
+}
+```
+
+### Error structure
+
+Every error includes:
+
+- `code` - Error code enum value (e.g., `FILE_NOT_FOUND`)
+- `message` - Human-readable error message
+- `context` - Type-safe context object with error details
+- `httpStatus` - HTTP status code from container API
+- `operation` - Operation that failed (e.g., `file.read`)
+- `suggestion` - Actionable suggestion to fix the error
+- `timestamp` - ISO 8601 timestamp when error occurred
+- `documentation` - Link to relevant documentation (when available)
+
+## Error categories
+
+### File system errors
+
+**FileNotFoundError** - File or directory doesn't exist:
+
+```typescript
+try {
+  const content = await sandbox.files.read('/missing.txt');
+} catch (error) {
+  if (error instanceof FileNotFoundError) {
+    console.error('Path:', error.path); // "/missing.txt"
+  }
+}
+```
+
+**FileExistsError** - File already exists:
+
+```typescript
+try {
+  await sandbox.files.write('/existing.txt', 'data', { overwrite: false });
+} catch (error) {
+  if (error instanceof FileExistsError) {
+    console.error('File exists:', error.path);
+    // Retry with overwrite: true
+  }
+}
+```
+
+**FileTooLargeError** - File exceeds size limits:
+
+```typescript
+try {
+  // Default max: 10MB for read operations
+  await sandbox.files.read('/huge-file.bin');
+} catch (error) {
+  if (error instanceof FileTooLargeError) {
+    console.error('File too large:', error.path);
+    // Use streaming read instead
+  }
+}
+```
+
+**PermissionDeniedError** - Insufficient permissions:
+
+```typescript
+try {
+  await sandbox.exec('cat /etc/shadow');
+} catch (error) {
+  if (error instanceof PermissionDeniedError) {
+    console.error('Permission denied:', error.path);
+  }
+}
+```
+
+### Command errors
+
+**CommandNotFoundError** - Command doesn't exist:
+
+```typescript
+try {
+  await sandbox.exec('nonexistent-command');
+} catch (error) {
+  if (error instanceof CommandNotFoundError) {
+    console.error('Command not found:', error.command);
+    console.error('Suggestion:', error.suggestion); // "Install the package or check PATH"
+  }
+}
+```
+
+**CommandError** - Command failed with non-zero exit code:
+
+```typescript
+try {
+  await sandbox.exec('npm test');
+} catch (error) {
+  if (error instanceof CommandError) {
+    console.error('Command:', error.command);
+    console.error('Exit code:', error.exitCode);
+    console.error('Stdout:', error.stdout);
+    console.error('Stderr:', error.stderr);
+  }
+}
+```
+
+### Process errors
+
+**ProcessNotFoundError** - Process doesn't exist:
+
+```typescript
+try {
+  await sandbox.killProcess('invalid-id');
+} catch (error) {
+  if (error instanceof ProcessNotFoundError) {
+    console.error('Process not found:', error.processId);
+  }
+}
+```
+
+**ProcessReadyTimeoutError** - Process didn't become ready in time:
+
+```typescript
+try {
+  await sandbox.startProcess({
+    command: 'npm run dev',
+    waitUntilReady: { timeout: 10000 }
+  });
+} catch (error) {
+  if (error instanceof ProcessReadyTimeoutError) {
+    console.error('Timeout after:', error.timeout, 'ms');
+    console.error('Condition:', error.condition);
+  }
+}
+```
+
+**ProcessExitedBeforeReadyError** - Process crashed before becoming ready:
+
+```typescript
+try {
+  await sandbox.startProcess({
+    command: 'npm run dev',
+    waitUntilReady: { port: 3000 }
+  });
+} catch (error) {
+  if (error instanceof ProcessExitedBeforeReadyError) {
+    console.error('Process exited with code:', error.exitCode);
+    console.error('Command:', error.command);
+  }
+}
+```
+
+### Port errors
+
+**PortAlreadyExposedError** - Port is already exposed:
+
+```typescript
+try {
+  await sandbox.exposePort(8080, 'app');
+  await sandbox.exposePort(8080, 'api'); // Error!
+} catch (error) {
+  if (error instanceof PortAlreadyExposedError) {
+    console.error('Port already exposed:', error.port);
+    console.error('Existing name:', error.portName);
+  }
+}
+```
+
+**PortNotExposedError** - Port isn't exposed:
+
+```typescript
+try {
+  await sandbox.unexposePort(9999);
+} catch (error) {
+  if (error instanceof PortNotExposedError) {
+    console.error('Port not exposed:', error.port);
+  }
+}
+```
+
+**InvalidPortError** - Invalid port number:
+
+```typescript
+try {
+  await sandbox.exposePort(80); // Privileged port
+} catch (error) {
+  if (error instanceof InvalidPortError) {
+    console.error('Invalid port:', error.port);
+    console.error('Reason:', error.reason);
+  }
+}
+```
+
+**ServiceNotRespondingError** - Service on port isn't responding:
+
+```typescript
+try {
+  await sandbox.exposePort(8080, 'api');
+} catch (error) {
+  if (error instanceof ServiceNotRespondingError) {
+    console.error('Service not responding on port:', error.port);
+    // Start the service first
+  }
+}
+```
+
+### Git errors
+
+**GitRepositoryNotFoundError** - Repository doesn't exist:
+
+```typescript
+try {
+  await sandbox.git.clone('https://github.com/user/nonexistent');
+} catch (error) {
+  if (error instanceof GitRepositoryNotFoundError) {
+    console.error('Repository not found:', error.repository);
+  }
+}
+```
+
+**GitAuthenticationError** - Git authentication failed:
+
+```typescript
+try {
+  await sandbox.git.clone('https://github.com/private/repo');
+} catch (error) {
+  if (error instanceof GitAuthenticationError) {
+    console.error('Auth failed for:', error.repository);
+    // Provide credentials
+  }
+}
+```
+
+**GitBranchNotFoundError** - Branch doesn't exist:
+
+```typescript
+try {
+  await sandbox.git.clone('https://github.com/user/repo', {
+    branch: 'nonexistent'
+  });
+} catch (error) {
+  if (error instanceof GitBranchNotFoundError) {
+    console.error('Branch not found:', error.branch);
+    console.error('Repository:', error.repository);
+  }
+}
+```
+
+### Backup errors
+
+**BackupNotFoundError** - Backup doesn't exist in R2:
+
+```typescript
+try {
+  await sandbox.restoreBackup('nonexistent-backup-id');
+} catch (error) {
+  if (error instanceof BackupNotFoundError) {
+    console.error('Backup not found:', error.backupId);
+  }
+}
+```
+
+**BackupExpiredError** - Backup exceeded TTL:
+
+```typescript
+try {
+  await sandbox.restoreBackup('old-backup-id');
+} catch (error) {
+  if (error instanceof BackupExpiredError) {
+    console.error('Backup expired at:', error.expiredAt);
+  }
+}
+```
+
+## Automatic retry logic
+
+The SDK automatically retries transient failures when starting containers.
+
+### HTTP status code semantics
+
+| Status | Meaning | SDK Behavior |
+|--------|---------|-------------|
+| **503** | Service Unavailable (container starting) | Retry with exponential backoff |
+| **500** | Internal Server Error (config error) | Fail immediately |
+| **400** | Bad Request (capacity limits, validation) | Fail immediately |
+
+### Retry configuration
+
+**Default settings:**
+- Total budget: 2 minutes
+- Backoff: 3s → 6s → 12s → 24s → 30s (capped at 30s)
+- Only retries: 503 errors
+
+**Example retry sequence:**
+
+```
+Attempt 1: 503 Service Unavailable → Wait 3s
+Attempt 2: 503 Service Unavailable → Wait 6s
+Attempt 3: 503 Service Unavailable → Wait 12s
+Attempt 4: 200 OK → Success
+```
+
+### Customize retry behavior
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox', {
+  containerTimeouts: {
+    start: 120000, // 2 minute total budget
+    connect: 30000 // 30 second connect timeout per attempt
+  }
+});
+```
+
+## Capacity limit errors
+
+When hitting account limits, the Containers API returns 400 with error codes:
+
+### Error codes
+
+| Code | Description | Action |
+|------|-------------|--------|
+| `SURPASSED_BASE_LIMITS` | Exceeded per-deployment limits | Scale down or contact support |
+| `SURPASSED_TOTAL_LIMITS` | Exceeded account-wide limits | Call `destroy()` on unused sandboxes |
+| `LOCATION_SURPASSED_BASE_LIMITS` | Exceeded location-specific limits | Use different location or scale down |
+
+### Handling capacity errors
+
+```typescript
+try {
+  const sandbox = getSandbox(env.SANDBOX, `sandbox-${userId}`);
+  await sandbox.exec('echo "test"');
+} catch (error) {
+  if (error.httpStatus === 400) {
+    if (error.message.includes('SURPASSED_TOTAL_LIMITS')) {
+      // Clean up old sandboxes
+      await cleanupOldSandboxes(env);
+      // Retry
+    }
+  }
+}
+```
+
+### Account limits (Workers Paid)
+
+Default limits for Workers Paid plan:
+
+| Resource | Limit |
+|----------|-------|
+| Concurrent Memory | 400 GiB |
+| Concurrent vCPU | 100 |
+| Concurrent Disk | 2 TB |
+
+See [Containers limits](https://developers.cloudflare.com/containers/platform-details/limits/) for current values.
+
+## Error recovery patterns
+
+### Retry with exponential backoff
+
+```typescript
+async function executeWithRetry(
+  sandbox: Sandbox,
+  command: string,
+  maxRetries = 3
+) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await sandbox.exec(command);
+    } catch (error) {
+      if (i === maxRetries - 1) throw error;
+      
+      // Retry on transient errors
+      if (error.httpStatus === 503) {
+        const delay = Math.pow(2, i) * 1000; // 1s, 2s, 4s
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      throw error; // Don't retry permanent errors
+    }
+  }
+}
+```
+
+### Fallback to alternative approaches
+
+```typescript
+async function readFileSafely(sandbox: Sandbox, path: string) {
+  try {
+    return await sandbox.files.read(path);
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      // Fallback to streaming read
+      const result = await sandbox.exec(`cat ${path}`);
+      return result.stdout;
+    }
+    throw error;
+  }
+}
+```
+
+### Graceful degradation
+
+```typescript
+async function getMetrics(sandbox: Sandbox) {
+  try {
+    const result = await sandbox.exec('system-metrics');
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    if (error instanceof CommandNotFoundError) {
+      // Fallback to basic metrics
+      return { available: false };
+    }
+    throw error;
+  }
+}
+```
+
+### Cleanup on error
+
+```typescript
+async function processWithCleanup(sandbox: Sandbox) {
+  let tempDir: string | null = null;
+  
+  try {
+    // Create temp directory
+    const result = await sandbox.exec('mktemp -d');
+    tempDir = result.stdout.trim();
+    
+    // Do work
+    await sandbox.exec(`process-data.sh ${tempDir}`);
+  } catch (error) {
+    console.error('Processing failed:', error.message);
+    throw error;
+  } finally {
+    // Always cleanup
+    if (tempDir) {
+      await sandbox.exec(`rm -rf ${tempDir}`);
+    }
+  }
+}
+```
+
+## Best practices
+
+### Always check error types
+
+```typescript
+// Good: Type-safe error handling
+try {
+  await sandbox.exec('command');
+} catch (error) {
+  if (error instanceof CommandNotFoundError) {
+    // Handle missing command
+  } else if (error instanceof PermissionDeniedError) {
+    // Handle permission issues
+  } else {
+    // Handle unexpected errors
+    throw error;
+  }
+}
+
+// Bad: Generic error handling
+try {
+  await sandbox.exec('command');
+} catch (error) {
+  console.error('Something went wrong');
+}
+```
+
+### Use error context
+
+```typescript
+try {
+  await sandbox.files.read('/data/input.json');
+} catch (error) {
+  if (error instanceof FileNotFoundError) {
+    // Use structured context
+    console.error('File not found:', error.path);
+    console.error('Suggestion:', error.suggestion);
+    console.error('Operation:', error.operation);
+    
+    // Log full error for debugging
+    console.error('Full error:', JSON.stringify(error.toJSON()));
+  }
+}
+```
+
+### Don't swallow errors
+
+```typescript
+// Bad: Silent failure
+try {
+  await sandbox.exec('critical-command');
+} catch (error) {
+  // Error is lost!
+}
+
+// Good: Log and re-throw
+try {
+  await sandbox.exec('critical-command');
+} catch (error) {
+  console.error('Critical command failed:', error.message);
+  throw error; // Re-throw for caller to handle
+}
+
+// Also good: Handle and continue
+try {
+  await sandbox.exec('optional-command');
+} catch (error) {
+  console.warn('Optional command failed, continuing:', error.message);
+  // Continue execution
+}
+```
+
+### Set appropriate timeouts
+
+```typescript
+// Configure timeouts based on operation type
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox', {
+  containerTimeouts: {
+    start: 120000,   // 2 minutes for container startup
+    connect: 30000,  // 30 seconds for initial connection
+    request: 300000  // 5 minutes for long-running commands
+  }
+});
+
+// Use command-level timeouts for specific operations
+try {
+  await sandbox.exec('long-running-task', {
+    timeout: 600000 // 10 minutes
+  });
+} catch (error) {
+  if (error.message.includes('timeout')) {
+    console.error('Task timed out after 10 minutes');
+  }
+}
+```
+
+### Monitor and alert
+
+```typescript
+class ErrorMonitor {
+  private errorCounts = new Map<string, number>();
+
+  track(error: SandboxError) {
+    const count = this.errorCounts.get(error.code) || 0;
+    this.errorCounts.set(error.code, count + 1);
+
+    // Alert on repeated errors
+    if (count > 10) {
+      this.alert(`High error rate for ${error.code}`);
+    }
+  }
+
+  alert(message: string) {
+    // Send to monitoring service
+    console.error('ALERT:', message);
+  }
+}
+
+const monitor = new ErrorMonitor();
+
+try {
+  await sandbox.exec('command');
+} catch (error) {
+  if (error instanceof SandboxError) {
+    monitor.track(error);
+  }
+  throw error;
+}
+```
+
+## Debugging errors
+
+### Enable detailed logging
+
+```typescript
+import { createLogger } from '@repo/shared';
+
+const logger = createLogger({
+  level: 'debug',
+  component: 'sandbox'
+});
+
+const sandbox = getSandbox(env.SANDBOX, 'debug', {
+  logger: logger
+});
+
+// Logs detailed request/response information
+await sandbox.exec('echo "test"');
+```
+
+### Inspect error objects
+
+```typescript
+try {
+  await sandbox.exec('failing-command');
+} catch (error) {
+  if (error instanceof SandboxError) {
+    // Full error details
+    console.error(JSON.stringify(error.toJSON(), null, 2));
+    
+    // Specific fields
+    console.error('Code:', error.code);
+    console.error('Operation:', error.operation);
+    console.error('Context:', error.context);
+    console.error('Stack:', error.stack);
+  }
+}
+```
+
+### Capture error metrics
+
+```typescript
+interface ErrorMetrics {
+  timestamp: string;
+  code: string;
+  operation: string;
+  duration: number;
+}
+
+const metrics: ErrorMetrics[] = [];
+
+const start = Date.now();
+try {
+  await sandbox.exec('command');
+} catch (error) {
+  if (error instanceof SandboxError) {
+    metrics.push({
+      timestamp: new Date().toISOString(),
+      code: error.code,
+      operation: error.operation || 'unknown',
+      duration: Date.now() - start
+    });
+  }
+  throw error;
+}
+```
+
+## Common error scenarios
+
+### Container startup failures
+
+```typescript
+try {
+  const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+  await sandbox.exec('echo "test"');
+} catch (error) {
+  if (error.httpStatus === 500) {
+    // Permanent failure - check configuration
+    console.error('Container config error:', error.message);
+  } else if (error.httpStatus === 503) {
+    // Should have been retried automatically
+    console.error('Container failed to start after retries');
+  }
+}
+```
+
+### Resource exhaustion
+
+```typescript
+try {
+  await sandbox.exec('memory-intensive-task');
+} catch (error) {
+  if (error.message.includes('memory')) {
+    console.error('Out of memory - reduce memory usage or scale up');
+  }
+}
+```
+
+### Network failures
+
+```typescript
+try {
+  await sandbox.git.clone('https://github.com/user/repo');
+} catch (error) {
+  if (error instanceof GitNetworkError) {
+    console.error('Network error:', error.message);
+    // Retry with exponential backoff
+  }
+}
+```
+
+### Permission issues
+
+```typescript
+try {
+  await sandbox.exec('systemctl restart nginx');
+} catch (error) {
+  if (error instanceof PermissionDeniedError) {
+    console.error('Need root access - containers run as non-root user');
+  }
+}
+```

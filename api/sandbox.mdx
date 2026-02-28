@@ -1,0 +1,1120 @@
+---
+title: 'Sandbox'
+description: 'The Sandbox class manages isolated code execution environments in Cloudflare containers.'
+---
+
+The `Sandbox` class extends the Cloudflare Container class and provides a complete API for executing commands, managing files, running background processes, and exposing network services within isolated sandbox environments.
+
+## Overview
+
+The Sandbox is a Durable Object that manages the lifecycle of a container instance. It provides:
+
+- Command execution with streaming output
+- Background process management
+- File system operations
+- Git repository cloning
+- Port exposure with preview URLs
+- Session management for isolated execution contexts
+- Code interpreter for Python/JavaScript
+- S3-compatible bucket mounting
+- Directory backup and restore
+
+## Getting a sandbox instance
+
+Use `getSandbox()` to get a type-safe sandbox instance:
+
+```typescript
+import { getSandbox, Sandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox-id');
+    
+    // Execute a command
+    const result = await sandbox.exec('ls -la');
+    
+    return new Response(result.stdout);
+  }
+};
+```
+
+## Constructor
+
+The Sandbox constructor is typically not called directly. Use `getSandbox()` instead.
+
+<ParamField path="ctx" type="DurableObjectState" required>
+  Durable Object state provided by Cloudflare Workers runtime.
+</ParamField>
+
+<ParamField path="env" type="object" required>
+  Environment bindings containing configuration values:
+  
+  <Expandable title="Environment configuration">
+    <ResponseField name="SANDBOX_LOG_LEVEL" type="string">
+      Logging level: `debug`, `info`, `warn`, or `error`. Default: `info`.
+    </ResponseField>
+    <ResponseField name="SANDBOX_LOG_FORMAT" type="string">
+      Log format: `json` or `pretty`. Default: `json`.
+    </ResponseField>
+    <ResponseField name="SANDBOX_TRANSPORT" type="string">
+      Transport mode: `http` or `websocket`. Default: `http`.
+    </ResponseField>
+    <ResponseField name="BACKUP_BUCKET" type="R2Bucket">
+      R2 bucket binding for backup storage.
+    </ResponseField>
+    <ResponseField name="R2_ACCESS_KEY_ID" type="string">
+      R2 access key for presigned URLs (backup operations).
+    </ResponseField>
+    <ResponseField name="R2_SECRET_ACCESS_KEY" type="string">
+      R2 secret key for presigned URLs (backup operations).
+    </ResponseField>
+    <ResponseField name="CLOUDFLARE_ACCOUNT_ID" type="string">
+      Cloudflare account ID for R2 operations.
+    </ResponseField>
+    <ResponseField name="BACKUP_BUCKET_NAME" type="string">
+      Name of R2 bucket for backups.
+    </ResponseField>
+    <ResponseField name="SANDBOX_INSTANCE_TIMEOUT_MS" type="string">
+      Container instance provisioning timeout in milliseconds (5000-300000). Default: `30000`.
+    </ResponseField>
+    <ResponseField name="SANDBOX_PORT_TIMEOUT_MS" type="string">
+      Application startup timeout in milliseconds (10000-600000). Default: `90000`.
+    </ResponseField>
+    <ResponseField name="SANDBOX_POLL_INTERVAL_MS" type="string">
+      Container readiness polling interval in milliseconds (100-5000). Default: `1000`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+## Properties
+
+<ResponseField name="defaultPort" type="number">
+  Default port for the container's control plane. Always `3000`.
+</ResponseField>
+
+<ResponseField name="sleepAfter" type="string | number">
+  Duration after which the sandbox sleeps if no requests are received. Default: `"10m"`. Can be a string like `"30s"`, `"5m"`, `"1h"` or a number representing seconds.
+</ResponseField>
+
+<ResponseField name="client" type="SandboxClient">
+  HTTP client for communicating with the container runtime.
+</ResponseField>
+
+<ResponseField name="envVars" type="Record<string, string>">
+  Environment variables set at the sandbox level.
+</ResponseField>
+
+## Command execution
+
+### exec()
+
+Execute a shell command in the default session.
+
+```typescript
+const result = await sandbox.exec('npm install', {
+  cwd: '/workspace',
+  timeout: 30000
+});
+
+console.log(result.stdout);
+```
+
+<ParamField path="command" type="string" required>
+  Shell command to execute.
+</ParamField>
+
+<ParamField path="options" type="ExecOptions">
+  Execution options:
+  
+  <Expandable title="ExecOptions properties">
+    <ResponseField name="timeout" type="number">
+      Maximum execution time in milliseconds.
+    </ResponseField>
+    <ResponseField name="env" type="Record<string, string | undefined>">
+      Environment variables for this command. Temporarily overrides session-level variables.
+    </ResponseField>
+    <ResponseField name="cwd" type="string">
+      Working directory for command execution.
+    </ResponseField>
+    <ResponseField name="encoding" type="string">
+      Text encoding for output. Default: `'utf8'`.
+    </ResponseField>
+    <ResponseField name="stream" type="boolean">
+      Enable real-time output streaming via callbacks.
+    </ResponseField>
+    <ResponseField name="onOutput" type="(stream: 'stdout' | 'stderr', data: string) => void">
+      Callback for real-time output data.
+    </ResponseField>
+    <ResponseField name="onComplete" type="(result: ExecResult) => void">
+      Callback when command completes (only with `stream: true`).
+    </ResponseField>
+    <ResponseField name="onError" type="(error: Error) => void">
+      Callback for execution errors.
+    </ResponseField>
+    <ResponseField name="signal" type="AbortSignal">
+      AbortSignal for cancelling execution.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="ExecResult">
+  Execution result:
+  
+  <Expandable title="ExecResult properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the command succeeded (exitCode === 0).
+    </ResponseField>
+    <ResponseField name="exitCode" type="number" required>
+      Process exit code.
+    </ResponseField>
+    <ResponseField name="stdout" type="string" required>
+      Standard output content.
+    </ResponseField>
+    <ResponseField name="stderr" type="string" required>
+      Standard error content.
+    </ResponseField>
+    <ResponseField name="command" type="string" required>
+      Command that was executed.
+    </ResponseField>
+    <ResponseField name="duration" type="number" required>
+      Execution duration in milliseconds.
+    </ResponseField>
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp when command started.
+    </ResponseField>
+    <ResponseField name="sessionId" type="string">
+      Session ID if provided.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### execStream()
+
+Execute a command with streaming output (Server-Sent Events).
+
+```typescript
+const stream = await sandbox.execStream('npm run build');
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    console.log(event.data);
+  }
+}
+```
+
+<ParamField path="command" type="string" required>
+  Shell command to execute.
+</ParamField>
+
+<ParamField path="options" type="StreamOptions">
+  Streaming options (extends BaseExecOptions with `signal` and `bufferSize`).
+</ParamField>
+
+<ResponseField name="stream" type="ReadableStream<Uint8Array>">
+  SSE stream of execution events. Use `parseSSEStream()` to consume.
+</ResponseField>
+
+## Background processes
+
+### startProcess()
+
+Start a long-running background process.
+
+```typescript
+const proc = await sandbox.startProcess('npm run dev', {
+  onOutput: (stream, data) => console.log(`[${stream}]`, data)
+});
+
+// Wait for server to be ready
+await proc.waitForPort(3000);
+```
+
+<ParamField path="command" type="string" required>
+  Shell command to execute.
+</ParamField>
+
+<ParamField path="options" type="ProcessOptions">
+  Process options:
+  
+  <Expandable title="ProcessOptions properties">
+    <ResponseField name="processId" type="string">
+      Custom process ID for later reference. Auto-generated if not provided.
+    </ResponseField>
+    <ResponseField name="autoCleanup" type="boolean">
+      Automatically cleanup process record after exit. Default: `true`.
+    </ResponseField>
+    <ResponseField name="onExit" type="(code: number | null) => void">
+      Callback when process exits.
+    </ResponseField>
+    <ResponseField name="onOutput" type="(stream: 'stdout' | 'stderr', data: string) => void">
+      Callback for real-time output.
+    </ResponseField>
+    <ResponseField name="onStart" type="(process: Process) => void">
+      Callback when process starts successfully.
+    </ResponseField>
+    <ResponseField name="onError" type="(error: Error) => void">
+      Callback for process errors.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="process" type="Process">
+  Process handle with methods for monitoring and control.
+</ResponseField>
+
+### listProcesses()
+
+List all tracked processes in the sandbox.
+
+```typescript
+const processes = await sandbox.listProcesses();
+for (const proc of processes) {
+  console.log(`${proc.id}: ${proc.status}`);
+}
+```
+
+<ResponseField name="processes" type="Process[]">
+  Array of process handles.
+</ResponseField>
+
+### getProcess()
+
+Get a specific process by ID.
+
+```typescript
+const proc = await sandbox.getProcess('my-process-id');
+if (proc) {
+  console.log(proc.status);
+}
+```
+
+<ParamField path="id" type="string" required>
+  Process ID.
+</ParamField>
+
+<ResponseField name="process" type="Process | null">
+  Process handle, or null if not found.
+</ResponseField>
+
+### killProcess()
+
+Terminate a running process.
+
+```typescript
+await sandbox.killProcess('my-process-id', 'SIGTERM');
+```
+
+<ParamField path="id" type="string" required>
+  Process ID.
+</ParamField>
+
+<ParamField path="signal" type="string">
+  Signal to send. Default: `'SIGTERM'`.
+</ParamField>
+
+### killAllProcesses()
+
+Terminate all running processes.
+
+```typescript
+const count = await sandbox.killAllProcesses();
+console.log(`Killed ${count} processes`);
+```
+
+<ResponseField name="count" type="number">
+  Number of processes terminated.
+</ResponseField>
+
+### cleanupCompletedProcesses()
+
+Remove completed process records from tracking.
+
+```typescript
+const count = await sandbox.cleanupCompletedProcesses();
+console.log(`Cleaned up ${count} processes`);
+```
+
+<ResponseField name="count" type="number">
+  Number of processes cleaned up.
+</ResponseField>
+
+### getProcessLogs()
+
+Get accumulated logs for a process.
+
+```typescript
+const logs = await sandbox.getProcessLogs('my-process-id');
+console.log(logs.stdout);
+```
+
+<ParamField path="id" type="string" required>
+  Process ID.
+</ParamField>
+
+<ResponseField name="logs" type="object">
+  Process logs:
+  
+  <Expandable title="Log properties">
+    <ResponseField name="stdout" type="string" required>
+      Standard output content.
+    </ResponseField>
+    <ResponseField name="stderr" type="string" required>
+      Standard error content.
+    </ResponseField>
+    <ResponseField name="processId" type="string" required>
+      Process ID.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### streamProcessLogs()
+
+Stream logs from a running process (Server-Sent Events).
+
+```typescript
+const stream = await sandbox.streamProcessLogs('my-process-id');
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    console.log(event.data);
+  }
+}
+```
+
+<ParamField path="processId" type="string" required>
+  Process ID.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Streaming options:
+  
+  <Expandable title="Options properties">
+    <ResponseField name="signal" type="AbortSignal">
+      AbortSignal for cancelling the stream.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="stream" type="ReadableStream<Uint8Array>">
+  SSE stream of log events.
+</ResponseField>
+
+## File operations
+
+### writeFile()
+
+Write content to a file.
+
+```typescript
+await sandbox.writeFile('/workspace/config.json', 
+  JSON.stringify({ setting: 'value' })
+);
+```
+
+<ParamField path="path" type="string" required>
+  Absolute file path.
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  File content to write.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Write options:
+  
+  <Expandable title="Options properties">
+    <ResponseField name="encoding" type="string">
+      Text encoding. Default: `'utf8'`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="WriteFileResult">
+  Write operation result with `success`, `path`, and `timestamp` fields.
+</ResponseField>
+
+### readFile()
+
+Read content from a file.
+
+```typescript
+const result = await sandbox.readFile('/workspace/config.json');
+console.log(result.content);
+```
+
+<ParamField path="path" type="string" required>
+  Absolute file path.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Read options:
+  
+  <Expandable title="Options properties">
+    <ResponseField name="encoding" type="string">
+      Text encoding. Default: `'utf8'`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="ReadFileResult">
+  Read operation result:
+  
+  <Expandable title="ReadFileResult properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the read succeeded.
+    </ResponseField>
+    <ResponseField name="path" type="string" required>
+      File path.
+    </ResponseField>
+    <ResponseField name="content" type="string" required>
+      File content.
+    </ResponseField>
+    <ResponseField name="encoding" type="'utf-8' | 'base64'">
+      Encoding used for content.
+    </ResponseField>
+    <ResponseField name="isBinary" type="boolean">
+      Whether the file is detected as binary.
+    </ResponseField>
+    <ResponseField name="mimeType" type="string">
+      MIME type (e.g., `'image/png'`, `'text/plain'`).
+    </ResponseField>
+    <ResponseField name="size" type="number">
+      File size in bytes.
+    </ResponseField>
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### readFileStream()
+
+Stream file content for large files (Server-Sent Events).
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/large-file.bin');
+const { metadata, data } = await streamFile(stream);
+
+console.log(`Size: ${metadata.size}, Type: ${metadata.mimeType}`);
+```
+
+<ParamField path="path" type="string" required>
+  Absolute file path.
+</ParamField>
+
+<ResponseField name="stream" type="ReadableStream<Uint8Array>">
+  SSE stream of file chunks. Use `streamFile()` helper to consume.
+</ResponseField>
+
+### mkdir()
+
+Create a directory.
+
+```typescript
+await sandbox.mkdir('/workspace/data', { recursive: true });
+```
+
+<ParamField path="path" type="string" required>
+  Absolute directory path.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Directory options:
+  
+  <Expandable title="Options properties">
+    <ResponseField name="recursive" type="boolean">
+      Create parent directories if needed. Default: `false`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="MkdirResult">
+  Create operation result with `success`, `path`, `recursive`, and `timestamp` fields.
+</ResponseField>
+
+### deleteFile()
+
+Delete a file or directory.
+
+```typescript
+await sandbox.deleteFile('/workspace/temp.txt');
+```
+
+<ParamField path="path" type="string" required>
+  Absolute file or directory path.
+</ParamField>
+
+<ResponseField name="result" type="DeleteFileResult">
+  Delete operation result with `success`, `path`, and `timestamp` fields.
+</ResponseField>
+
+### renameFile()
+
+Rename a file or directory.
+
+```typescript
+await sandbox.renameFile('/workspace/old.txt', '/workspace/new.txt');
+```
+
+<ParamField path="oldPath" type="string" required>
+  Current file path.
+</ParamField>
+
+<ParamField path="newPath" type="string" required>
+  New file path.
+</ParamField>
+
+<ResponseField name="result" type="RenameFileResult">
+  Rename operation result with `success`, `path`, `newPath`, and `timestamp` fields.
+</ResponseField>
+
+### moveFile()
+
+Move a file or directory to a different location.
+
+```typescript
+await sandbox.moveFile('/workspace/file.txt', '/workspace/subdir/file.txt');
+```
+
+<ParamField path="sourcePath" type="string" required>
+  Source file path.
+</ParamField>
+
+<ParamField path="destinationPath" type="string" required>
+  Destination file path.
+</ParamField>
+
+<ResponseField name="result" type="MoveFileResult">
+  Move operation result with `success`, `path`, `newPath`, and `timestamp` fields.
+</ResponseField>
+
+### listFiles()
+
+List files in a directory.
+
+```typescript
+const result = await sandbox.listFiles('/workspace', { 
+  recursive: true,
+  includeHidden: false 
+});
+
+for (const file of result.files) {
+  console.log(`${file.name} (${file.size} bytes)`);
+}
+```
+
+<ParamField path="path" type="string" required>
+  Absolute directory path.
+</ParamField>
+
+<ParamField path="options" type="ListFilesOptions">
+  Listing options:
+  
+  <Expandable title="ListFilesOptions properties">
+    <ResponseField name="recursive" type="boolean">
+      List files recursively. Default: `false`.
+    </ResponseField>
+    <ResponseField name="includeHidden" type="boolean">
+      Include hidden files (starting with `.`). Default: `false`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="ListFilesResult">
+  List operation result:
+  
+  <Expandable title="ListFilesResult properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the list succeeded.
+    </ResponseField>
+    <ResponseField name="path" type="string" required>
+      Directory path.
+    </ResponseField>
+    <ResponseField name="files" type="FileInfo[]" required>
+      Array of file information objects.
+    </ResponseField>
+    <ResponseField name="count" type="number" required>
+      Number of files found.
+    </ResponseField>
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### exists()
+
+Check if a file or directory exists.
+
+```typescript
+const result = await sandbox.exists('/workspace/config.json');
+if (result.exists) {
+  console.log('File exists');
+}
+```
+
+<ParamField path="path" type="string" required>
+  Absolute file or directory path.
+</ParamField>
+
+<ResponseField name="result" type="FileExistsResult">
+  Existence check result:
+  
+  <Expandable title="FileExistsResult properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the check succeeded.
+    </ResponseField>
+    <ResponseField name="path" type="string" required>
+      File path.
+    </ResponseField>
+    <ResponseField name="exists" type="boolean" required>
+      Whether the file exists.
+    </ResponseField>
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Git operations
+
+### gitCheckout()
+
+Clone a Git repository into the sandbox.
+
+```typescript
+await sandbox.gitCheckout('https://github.com/user/repo', {
+  branch: 'main',
+  targetDir: '/workspace/repo',
+  depth: 1  // Shallow clone
+});
+```
+
+<ParamField path="repoUrl" type="string" required>
+  Git repository URL.
+</ParamField>
+
+<ParamField path="options" type="object">
+  Clone options:
+  
+  <Expandable title="Options properties">
+    <ResponseField name="branch" type="string">
+      Branch to checkout. Default: repository default branch.
+    </ResponseField>
+    <ResponseField name="targetDir" type="string">
+      Target directory path. Default: `/workspace/{repo-name}`.
+    </ResponseField>
+    <ResponseField name="depth" type="number">
+      Clone depth for shallow clones (e.g., 1 for latest commit only).
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="GitCheckoutResult">
+  Checkout operation result with `success`, `repoUrl`, `branch`, `targetDir`, and `timestamp` fields.
+</ResponseField>
+
+## Environment management
+
+### setEnvVars()
+
+Set or unset environment variables in the default session.
+
+```typescript
+await sandbox.setEnvVars({
+  API_KEY: 'secret-key',
+  DEBUG: 'true',
+  OLD_VAR: undefined  // Unset this variable
+});
+```
+
+<ParamField path="envVars" type="Record<string, string | undefined>" required>
+  Environment variables to set or unset. Undefined values unset the variable.
+</ParamField>
+
+## Session management
+
+### createSession()
+
+Create a new isolated execution session.
+
+```typescript
+const session = await sandbox.createSession({
+  id: 'build-session',
+  env: { NODE_ENV: 'production' },
+  cwd: '/workspace/app'
+});
+
+// Use session methods
+await session.exec('npm run build');
+```
+
+<ParamField path="options" type="SessionOptions">
+  Session options:
+  
+  <Expandable title="SessionOptions properties">
+    <ResponseField name="id" type="string">
+      Session ID. Auto-generated if not provided.
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Session name for identification.
+    </ResponseField>
+    <ResponseField name="env" type="Record<string, string | undefined>">
+      Environment variables for this session.
+    </ResponseField>
+    <ResponseField name="cwd" type="string">
+      Working directory. Default: `/workspace`.
+    </ResponseField>
+    <ResponseField name="isolation" type="boolean">
+      Enable PID namespace isolation (requires CAP_SYS_ADMIN). Default: `false`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="session" type="ExecutionSession">
+  Session handle with the same API as Sandbox, bound to this session.
+</ResponseField>
+
+### deleteSession()
+
+Delete an execution session.
+
+```typescript
+await sandbox.deleteSession('build-session');
+```
+
+<ParamField path="sessionId" type="string" required>
+  Session ID to delete.
+</ParamField>
+
+<ResponseField name="result" type="SessionDeleteResult">
+  Delete operation result with `success`, `sessionId`, and `timestamp` fields.
+</ResponseField>
+
+## Code interpreter
+
+### runCode()
+
+Execute Python or JavaScript code with structured output.
+
+```typescript
+const result = await sandbox.runCode(`
+import pandas as pd
+df = pd.DataFrame({'a': [1, 2, 3]})
+df.describe()
+`, { language: 'python' });
+
+console.log(result.results);
+```
+
+<ParamField path="code" type="string" required>
+  Code to execute.
+</ParamField>
+
+<ParamField path="options" type="RunCodeOptions">
+  Execution options:
+  
+  <Expandable title="RunCodeOptions properties">
+    <ResponseField name="language" type="'python' | 'javascript'">
+      Programming language. Default: `'python'`.
+    </ResponseField>
+    <ResponseField name="contextId" type="string">
+      Existing context ID to reuse. Creates new context if not provided.
+    </ResponseField>
+    <ResponseField name="timeout" type="number">
+      Maximum execution time in milliseconds.
+    </ResponseField>
+    <ResponseField name="env" type="Record<string, string>">
+      Environment variables.
+    </ResponseField>
+    <ResponseField name="cwd" type="string">
+      Working directory.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="ExecutionResult">
+  Execution result with structured output, including text, charts, and errors.
+</ResponseField>
+
+### createCodeContext()
+
+Create a reusable code execution context.
+
+```typescript
+const ctx = await sandbox.createCodeContext({ 
+  language: 'python',
+  cwd: '/workspace' 
+});
+
+await sandbox.runCode('x = 42', { contextId: ctx.id });
+await sandbox.runCode('print(x)', { contextId: ctx.id });  // Uses same context
+```
+
+<ParamField path="options" type="CreateContextOptions">
+  Context options:
+  
+  <Expandable title="CreateContextOptions properties">
+    <ResponseField name="language" type="'python' | 'javascript'">
+      Programming language. Default: `'python'`.
+    </ResponseField>
+    <ResponseField name="cwd" type="string">
+      Working directory. Default: `/workspace`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="context" type="CodeContext">
+  Context handle with `id` and `language` properties.
+</ResponseField>
+
+### listCodeContexts()
+
+List all code execution contexts.
+
+```typescript
+const contexts = await sandbox.listCodeContexts();
+for (const ctx of contexts) {
+  console.log(`${ctx.id}: ${ctx.language}`);
+}
+```
+
+<ResponseField name="contexts" type="CodeContext[]">
+  Array of context handles.
+</ResponseField>
+
+### deleteCodeContext()
+
+Delete a code execution context.
+
+```typescript
+await sandbox.deleteCodeContext('ctx-id');
+```
+
+<ParamField path="contextId" type="string" required>
+  Context ID to delete.
+</ParamField>
+
+## Bucket mounting
+
+### mountBucket()
+
+Mount an S3-compatible bucket as a local directory using S3FS-FUSE.
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/workspace/data', {
+  endpoint: 'https://abc123.r2.cloudflarestorage.com',
+  provider: 'r2',
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  },
+  prefix: '/user-data/',
+  readOnly: true
+});
+```
+
+<ParamField path="bucket" type="string" required>
+  Bucket name.
+</ParamField>
+
+<ParamField path="mountPath" type="string" required>
+  Absolute path in container to mount at.
+</ParamField>
+
+<ParamField path="options" type="MountBucketOptions" required>
+  Mount configuration:
+  
+  <Expandable title="MountBucketOptions properties">
+    <ResponseField name="endpoint" type="string" required>
+      S3-compatible endpoint URL (e.g., `'https://abc123.r2.cloudflarestorage.com'`).
+    </ResponseField>
+    <ResponseField name="provider" type="'r2' | 's3' | 'gcs'">
+      Provider hint for automatic s3fs flag configuration.
+    </ResponseField>
+    <ResponseField name="credentials" type="BucketCredentials">
+      Explicit credentials (overrides environment variable auto-detection).
+    </ResponseField>
+    <ResponseField name="readOnly" type="boolean">
+      Mount filesystem as read-only. Default: `false`.
+    </ResponseField>
+    <ResponseField name="s3fsOptions" type="string[]">
+      Advanced s3fs options to override or extend defaults.
+    </ResponseField>
+    <ResponseField name="prefix" type="string">
+      Optional prefix/subdirectory within the bucket to mount. Must start with `/`.
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+### unmountBucket()
+
+Unmount a bucket filesystem.
+
+```typescript
+await sandbox.unmountBucket('/workspace/data');
+```
+
+<ParamField path="mountPath" type="string" required>
+  Absolute path where the bucket is mounted.
+</ParamField>
+
+## Backup operations
+
+### createBackup()
+
+Create a backup of a directory to R2 storage.
+
+```typescript
+const backup = await sandbox.createBackup({
+  dir: '/workspace',
+  name: 'project-backup',
+  ttl: 604800  // 7 days
+});
+
+// Store backup handle for later restore
+console.log(backup.id);
+```
+
+<ParamField path="options" type="BackupOptions" required>
+  Backup configuration:
+  
+  <Expandable title="BackupOptions properties">
+    <ResponseField name="dir" type="string" required>
+      Directory to back up (absolute path).
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Human-readable name for this backup.
+    </ResponseField>
+    <ResponseField name="ttl" type="number">
+      Seconds until automatic garbage collection. Default: `259200` (3 days).
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="backup" type="DirectoryBackup">
+  Backup handle:
+  
+  <Expandable title="DirectoryBackup properties">
+    <ResponseField name="id" type="string" required>
+      Unique backup identifier.
+    </ResponseField>
+    <ResponseField name="dir" type="string" required>
+      Directory that was backed up.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### restoreBackup()
+
+Restore a directory from a backup.
+
+```typescript
+const result = await sandbox.restoreBackup(backup);
+if (result.success) {
+  console.log(`Restored ${result.dir}`);
+}
+```
+
+<ParamField path="backup" type="DirectoryBackup" required>
+  Backup handle from `createBackup()`.
+</ParamField>
+
+<ResponseField name="result" type="RestoreBackupResult">
+  Restore operation result:
+  
+  <Expandable title="RestoreBackupResult properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the restore succeeded.
+    </ResponseField>
+    <ResponseField name="dir" type="string" required>
+      Directory that was restored.
+    </ResponseField>
+    <ResponseField name="id" type="string" required>
+      Backup ID that was restored.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Lifecycle management
+
+### destroy()
+
+Cleanup and destroy the sandbox container.
+
+```typescript
+await sandbox.destroy();
+```
+
+This method:
+- Disconnects WebSocket transport if active
+- Unmounts all mounted buckets
+- Stops the container
+- Cleans up resources
+
+<Warning>
+  Always call `destroy()` when using `keepAlive: true` to prevent resource leaks.
+</Warning>
+
+## WebSocket connection
+
+### wsConnect()
+
+Create a WebSocket connection to a specific port.
+
+```typescript
+const response = await sandbox.wsConnect(request, 8080);
+return response;
+```
+
+<ParamField path="request" type="Request" required>
+  WebSocket upgrade request.
+</ParamField>
+
+<ParamField path="port" type="number" required>
+  Port number to connect to (1024-65535, excluding 3000).
+</ParamField>
+
+<ResponseField name="response" type="Response">
+  WebSocket upgrade response.
+</ResponseField>
+
+<Note>
+  This method must be called on the stub returned by `getSandbox()`, not directly on the Sandbox instance.
+</Note>
+
+## Configuration methods
+
+### setContainerTimeouts()
+
+Configure container startup timeout values.
+
+```typescript
+await sandbox.setContainerTimeouts({
+  instanceGetTimeoutMS: 15000,
+  portReadyTimeoutMS: 30000,
+  waitIntervalMS: 500
+});
+```
+
+<ParamField path="timeouts" type="object" required>
+  Timeout configuration:
+  
+  <Expandable title="Timeout properties">
+    <ResponseField name="instanceGetTimeoutMS" type="number">
+      Container instance provisioning timeout (5000-300000ms).
+    </ResponseField>
+    <ResponseField name="portReadyTimeoutMS" type="number">
+      Application startup timeout (10000-600000ms).
+    </ResponseField>
+    <ResponseField name="waitIntervalMS" type="number">
+      Container readiness polling interval (100-5000ms).
+    </ResponseField>
+  </Expandable>
+</ParamField>
+
+<Note>
+  Timeout configuration can also be set via `SandboxOptions` in `getSandbox()` or environment variables.
+</Note>

@@ -1,0 +1,331 @@
+---
+title: File operations
+description: Reading, writing, and managing files in sandbox containers
+---
+
+## Overview
+
+The Sandbox SDK provides a comprehensive file system API for managing files and directories in the container. All operations are relative to the container's file system, with `/workspace` as the typical working directory.
+
+## Writing files
+
+Create or overwrite files with `writeFile()`:
+
+```typescript
+await sandbox.writeFile('/workspace/config.json', JSON.stringify({
+  apiKey: 'sk-...',
+  model: 'gpt-4'
+}));
+
+const result = await sandbox.exec('cat config.json');
+console.log(result.stdout); // {"apiKey":"sk-...","model":"gpt-4"}
+```
+
+### Binary files
+
+Write binary content using base64 encoding:
+
+```typescript
+// Encode binary data as base64
+const imageBase64 = btoa(binaryImageData);
+
+await sandbox.writeFile('/workspace/image.png', imageBase64, {
+  encoding: 'base64'
+});
+```
+
+### File result
+
+`writeFile()` returns a `WriteFileResult`:
+
+```typescript
+interface WriteFileResult {
+  success: boolean;
+  path: string;
+  timestamp: string;
+  exitCode?: number;
+}
+```
+
+## Reading files
+
+Read file contents with `readFile()`:
+
+```typescript
+const result = await sandbox.readFile('/workspace/data.json');
+
+if (result.success) {
+  const data = JSON.parse(result.content);
+  console.log('Loaded data:', data);
+}
+```
+
+### Binary detection
+
+The SDK automatically detects binary files and encodes them as base64:
+
+```typescript
+const result = await sandbox.readFile('/workspace/image.png');
+
+if (result.isBinary) {
+  console.log('MIME type:', result.mimeType); // 'image/png'
+  console.log('Encoding:', result.encoding);  // 'base64'
+  console.log('Size:', result.size);          // bytes
+  
+  // Decode base64 to binary
+  const binaryData = atob(result.content);
+}
+```
+
+### Read result
+
+```typescript
+interface ReadFileResult {
+  success: boolean;
+  path: string;
+  content: string;           // UTF-8 or base64
+  timestamp: string;
+  encoding?: 'utf-8' | 'base64';
+  isBinary?: boolean;
+  mimeType?: string;
+  size?: number;            // bytes
+  exitCode?: number;
+}
+```
+
+## Streaming files
+
+For large files, use streaming to avoid memory limits:
+
+```typescript
+const stream = await sandbox.readFileStream('/workspace/large-file.csv');
+
+for await (const chunk of stream) {
+  // Process chunk (Uint8Array or string)
+  console.log('Received chunk:', chunk.length, 'bytes');
+}
+```
+
+Streaming provides:
+- Metadata events (MIME type, size, encoding)
+- Chunk events (binary or text data)
+- Completion events (total bytes read)
+- Error events
+
+<Note>
+The SDK automatically decodes base64 binary chunks to `Uint8Array` for you.
+</Note>
+
+## Creating directories
+
+Create directories with `mkdir()`:
+
+```typescript
+// Create single directory
+await sandbox.mkdir('/workspace/output');
+
+// Create nested directories
+await sandbox.mkdir('/workspace/data/models/v1', {
+  recursive: true
+});
+```
+
+## Listing files
+
+List directory contents with `listFiles()`:
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  recursive: true,        // Include subdirectories
+  includeHidden: false    // Exclude hidden files
+});
+
+for (const file of result.files) {
+  console.log(file.name, file.type, file.size);
+}
+```
+
+### File info structure
+
+```typescript
+interface FileInfo {
+  name: string;            // File name
+  absolutePath: string;    // Full path
+  relativePath: string;    // Relative to list path
+  type: 'file' | 'directory' | 'symlink' | 'other';
+  size: number;            // Bytes
+  modifiedAt: string;      // ISO timestamp
+  mode: string;            // Unix permissions (e.g., '0644')
+  permissions: {
+    readable: boolean;
+    writable: boolean;
+    executable: boolean;
+  };
+}
+```
+
+## File operations
+
+### Deleting files
+
+```typescript
+await sandbox.deleteFile('/workspace/temp.txt');
+```
+
+### Renaming files
+
+```typescript
+await sandbox.renameFile(
+  '/workspace/draft.md',
+  '/workspace/final.md'
+);
+```
+
+### Moving files
+
+```typescript
+await sandbox.moveFile(
+  '/workspace/input/data.csv',
+  '/workspace/output/processed-data.csv'
+);
+```
+
+### Checking existence
+
+```typescript
+const result = await sandbox.exists('/workspace/config.json');
+
+if (result.exists) {
+  console.log('File exists');
+}
+```
+
+## File paths
+
+All file operations accept absolute paths:
+
+```typescript
+// Absolute paths (preferred)
+await sandbox.writeFile('/workspace/file.txt', 'content');
+
+// Relative to current working directory
+await sandbox.exec('cd /workspace');
+await sandbox.writeFile('file.txt', 'content'); // Works but not recommended
+```
+
+<Tip>
+Always use absolute paths starting with `/` to avoid ambiguity.
+</Tip>
+
+## Common patterns
+
+### Upload and process file
+
+```typescript
+// Upload file from request
+const formData = await request.formData();
+const file = formData.get('file');
+const content = await file.text();
+
+await sandbox.writeFile('/workspace/input.csv', content);
+
+// Process it
+const result = await sandbox.exec('python process.py input.csv');
+
+// Download result
+const output = await sandbox.readFile('/workspace/output.csv');
+return new Response(output.content);
+```
+
+### Create project structure
+
+```typescript
+// Create directory structure
+await sandbox.mkdir('/workspace/project/src', { recursive: true });
+await sandbox.mkdir('/workspace/project/tests', { recursive: true });
+
+// Write files
+await sandbox.writeFile('/workspace/project/package.json', JSON.stringify({
+  name: 'my-project',
+  version: '1.0.0'
+}));
+
+await sandbox.writeFile('/workspace/project/src/index.js', `
+console.log('Hello from sandbox!');
+`);
+```
+
+### Check file before reading
+
+```typescript
+const exists = await sandbox.exists('/workspace/output.json');
+
+if (!exists.exists) {
+  throw new Error('Output file not found');
+}
+
+const result = await sandbox.readFile('/workspace/output.json');
+const data = JSON.parse(result.content);
+```
+
+## Git operations
+
+Clone repositories with `gitCheckout()`:
+
+```typescript
+await sandbox.gitCheckout('https://github.com/user/repo.git', {
+  branch: 'main',
+  targetDir: '/workspace/repo',
+  depth: 1  // Shallow clone (faster)
+});
+
+// Files are now available
+const result = await sandbox.exec('ls repo/');
+```
+
+See the [Git guide](/guides/git-integration) for more details.
+
+## File persistence
+
+<Warning>
+Files only persist while the container is running. When the container sleeps, all files are lost.
+</Warning>
+
+For persistent storage:
+
+1. **Backups**: Use `createBackup()` and `restoreBackup()` for directory snapshots
+2. **Bucket mounts**: Mount S3-compatible storage for direct read/write
+3. **External storage**: Upload important files to R2, S3, or other storage services
+
+## Client architecture
+
+File operations flow through the `FileClient`:
+
+```
+Sandbox.writeFile()
+    ↓
+FileClient.writeFile()
+    ↓
+HTTP POST /api/write
+    ↓
+Container FileService
+    ↓
+File System
+```
+
+The client handles:
+- Path validation
+- Encoding conversion (UTF-8 ↔ base64)
+- Binary detection
+- Error mapping
+
+## Limitations
+
+- **Size limits**: Large files (>100MB) should use streaming
+- **Encoding**: Text files must be valid UTF-8 unless using base64
+- **Permissions**: All operations run as the container user (typically `root`)
+- **Symbolic links**: Supported but follow links by default
+
+<Tip>
+For very large file transfers, consider using bucket mounts instead of `readFile()`/`writeFile()`.
+</Tip>

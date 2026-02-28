@@ -1,0 +1,126 @@
+---
+title: 'deleteSession'
+description: 'Delete an execution session and clean up its resources'
+---
+
+Deletes an execution session, terminating any running processes and freeing associated resources.
+
+## Method Signature
+
+```typescript
+async deleteSession(sessionId: string): Promise<SessionDeleteResult>
+```
+
+## Parameters
+
+<ParamField path="sessionId" type="string" required>
+  The unique identifier of the session to delete
+</ParamField>
+
+## Returns
+
+<ResponseField name="SessionDeleteResult" type="object">
+  Result of the delete operation
+  
+  <Expandable title="properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the deletion succeeded
+    </ResponseField>
+    
+    <ResponseField name="sessionId" type="string" required>
+      The ID of the deleted session
+    </ResponseField>
+    
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp of the operation
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create a session
+const session = await sandbox.createSession({
+  name: 'temp-session'
+});
+
+console.log('Created session:', session.id);
+
+// Use the session
+await session.exec('echo "Hello"');
+
+// Delete when done
+const result = await sandbox.deleteSession(session.id);
+console.log('Deleted:', result.sessionId);
+```
+
+## Example: Cleanup After Error
+
+```typescript
+const session = await sandbox.createSession();
+
+try {
+  await session.exec('some-command');
+} catch (error) {
+  console.error('Command failed:', error);
+} finally {
+  // Always cleanup
+  await sandbox.deleteSession(session.id);
+}
+```
+
+## Example: Batch Cleanup
+
+```typescript
+// Track sessions for cleanup
+const sessions = [];
+
+// Create multiple sessions
+for (let i = 0; i < 5; i++) {
+  const session = await sandbox.createSession({
+    id: `worker-${i}`
+  });
+  sessions.push(session);
+}
+
+// Do work...
+
+// Cleanup all sessions
+for (const session of sessions) {
+  await sandbox.deleteSession(session.id);
+}
+```
+
+## Error Handling
+
+Throws an error if:
+- Session ID does not exist
+- Session is the default system session
+- Communication with the sandbox fails
+
+```typescript
+try {
+  await sandbox.deleteSession('invalid-id');
+} catch (error) {
+  console.error('Failed to delete session:', error.message);
+}
+```
+
+## Notes
+
+- All processes running in the session are terminated
+- Session environment variables and state are lost
+- The filesystem is NOT affected - files created by the session remain
+- Cannot delete the sandbox's default session
+- Session IDs cannot be reused
+- Sessions are automatically cleaned up when the sandbox is destroyed
+
+## See Also
+
+- [createSession](/api/create-session) - Create a new session
+- [Sessions Guide](/advanced/sessions-and-state) - Learn about session management

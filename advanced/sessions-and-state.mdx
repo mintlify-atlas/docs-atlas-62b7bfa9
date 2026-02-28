@@ -1,0 +1,436 @@
+---
+title: Sessions and state management
+description: Understanding session isolation, state persistence, and execution contexts in Cloudflare Sandbox SDK
+---
+
+## Overview
+
+Sessions provide isolated execution contexts within a sandbox, allowing you to maintain separate working directories, environment variables, and shell state across multiple command executions.
+
+## Session architecture
+
+### Default session
+
+Every sandbox automatically creates a default session when you execute your first command:
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Uses default session automatically
+await sandbox.exec('echo "Hello World"');
+await sandbox.exec('pwd'); // Working directory persists
+```
+
+### Multiple sessions
+
+Create multiple sessions to isolate different workflows:
+
+```typescript
+// Create a build session
+const buildSession = await sandbox.createSession({
+  id: 'build-session',
+  cwd: '/workspace/app'
+});
+
+// Create a test session
+const testSession = await sandbox.createSession({
+  id: 'test-session',
+  cwd: '/workspace/tests'
+});
+
+// Commands in different sessions are isolated
+await buildSession.exec('npm run build');
+await testSession.exec('npm test');
+```
+
+## State persistence
+
+### Working directory
+
+The current working directory persists across commands within the same session:
+
+```typescript
+const session = await sandbox.createSession();
+
+// Change directory
+await session.exec('cd /tmp');
+
+// Directory persists
+const result = await session.exec('pwd');
+console.log(result.stdout); // "/tmp"
+```
+
+### Environment variables
+
+Environment variables set in a session persist for that session:
+
+```typescript
+await session.exec('export API_KEY=secret123');
+await session.exec('export NODE_ENV=production');
+
+// Variables are available in subsequent commands
+await session.exec('echo $API_KEY'); // "secret123"
+```
+
+<Info>
+  Session state is maintained by running commands in a persistent bash shell using group commands (`{ cmd }`) rather than subshells. This ensures `cd`, `export`, and shell functions affect the session's environment.
+</Info>
+
+### Initial environment
+
+Set environment variables when creating a session:
+
+```typescript
+const session = await sandbox.createSession({
+  id: 'api-session',
+  env: {
+    API_KEY: 'secret123',
+    NODE_ENV: 'production',
+    LOG_LEVEL: 'debug'
+  }
+});
+
+// Variables are immediately available
+await session.exec('echo $NODE_ENV'); // "production"
+```
+
+## Execution modes
+
+The SDK uses two distinct execution patterns based on your needs:
+
+### Foreground execution
+
+Foreground commands run synchronously and preserve session state:
+
+```typescript
+// State-changing commands run in foreground
+await session.exec('cd /workspace && npm install');
+await session.exec('export PATH=$PATH:/usr/local/bin');
+
+// Next command sees the updated state
+await session.exec('which custom-tool');
+```
+
+**Characteristics:**
+- Blocks until command completes
+- Preserves working directory and environment
+- Returns complete stdout/stderr after execution
+- Suitable for sequential operations
+
+### Background execution
+
+Background processes run asynchronously and stream output:
+
+```typescript
+// Start a long-running server
+const process = await sandbox.startProcess({
+  command: 'npm run dev',
+  sessionId: 'dev-session'
+});
+
+// Stream logs in real-time
+for await (const log of process.logs()) {
+  console.log(log.output);
+}
+```
+
+**Characteristics:**
+- Non-blocking, returns immediately after start
+- Streams output in real-time
+- State changes don't persist to session
+- Suitable for servers and long-running tasks
+
+<Warning>
+  Background processes run in a subshell, so state changes (like `cd` or `export`) don't affect the parent session.
+</Warning>
+
+## Session serialization
+
+### Command ordering
+
+Commands within the same session execute sequentially using a mutex:
+
+```typescript
+// These commands run one at a time in order
+const promise1 = session.exec('npm install');
+const promise2 = session.exec('npm run build');
+const promise3 = session.exec('npm test');
+
+// All three are queued and execute in order
+await Promise.all([promise1, promise2, promise3]);
+```
+
+This prevents race conditions when commands depend on session state.
+
+### Cross-session parallelism
+
+Commands in different sessions can run in parallel:
+
+```typescript
+const frontend = await sandbox.createSession({ id: 'frontend' });
+const backend = await sandbox.createSession({ id: 'backend' });
+
+// These run simultaneously
+await Promise.all([
+  frontend.exec('npm run build'),
+  backend.exec('npm run build')
+]);
+```
+
+## Session lifecycle
+
+### Creating sessions
+
+Explicitly create a session with custom options:
+
+```typescript
+const session = await sandbox.createSession({
+  id: 'my-session',
+  cwd: '/workspace/project',
+  env: {
+    NODE_ENV: 'development'
+  }
+});
+```
+
+### Retrieving sessions
+
+Get an existing session by ID:
+
+```typescript
+const session = await sandbox.getSession('my-session');
+
+// Check if it exists
+try {
+  const session = await sandbox.getSession('unknown');
+} catch (error) {
+  console.error('Session not found');
+}
+```
+
+### Listing sessions
+
+Retrieve all active sessions:
+
+```typescript
+const sessions = await sandbox.listSessions();
+
+for (const session of sessions) {
+  console.log(`Session ${session.id} at ${session.cwd}`);
+}
+```
+
+### Deleting sessions
+
+Clean up sessions when done:
+
+```typescript
+// Delete a specific session
+await sandbox.deleteSession('my-session');
+
+// Delete all sessions
+const sessions = await sandbox.listSessions();
+for (const session of sessions) {
+  await sandbox.deleteSession(session.id);
+}
+```
+
+<Info>
+  The default session cannot be deleted. Attempting to delete it will have no effect.
+</Info>
+
+## Shell execution internals
+
+Understanding the implementation helps debug unexpected behavior:
+
+### Foreground mechanism
+
+Foreground commands use temporary files for reliable output capture:
+
+```bash
+# Simplified version of what happens internally
+{
+  cd "$cwd" || exit 1
+  { command } > stdout.tmp 2> stderr.tmp
+  echo $? > exitcode
+}
+```
+
+### Background mechanism
+
+Background processes use named pipes (FIFOs) for real-time streaming:
+
+```bash
+# Simplified version
+mkfifo stdout.pipe stderr.pipe
+(
+  { command } > stdout.pipe 2> stderr.pipe &
+  echo $! > pid
+)
+```
+
+### Completion detection
+
+Commands signal completion through atomic file operations:
+
+1. Write exit code to temporary file
+2. Atomic rename to signal completion
+3. SDK detects via `fs.watch` + polling fallback
+
+This hybrid approach handles unreliable filesystem events on tmpfs/overlayfs.
+
+## Best practices
+
+### Use sessions for isolation
+
+Create separate sessions for logically independent workflows:
+
+```typescript
+// Good: Isolated environments
+const dev = await sandbox.createSession({ id: 'dev', cwd: '/app' });
+const prod = await sandbox.createSession({ id: 'prod', cwd: '/app' });
+
+// Bad: Mixing environments in one session
+await session.exec('NODE_ENV=dev npm start');
+await session.exec('NODE_ENV=prod npm start');
+```
+
+### Chain related commands
+
+Use `&&` to chain dependent commands in a single execution:
+
+```typescript
+// Good: Single execution, atomic operation
+await session.exec('cd /workspace && npm install && npm run build');
+
+// Also good but slower: Separate executions
+await session.exec('cd /workspace');
+await session.exec('npm install');
+await session.exec('npm run build');
+```
+
+### Clean up temporary sessions
+
+Delete sessions after one-time operations:
+
+```typescript
+try {
+  const tempSession = await sandbox.createSession({
+    id: 'temp-analysis',
+    cwd: '/tmp'
+  });
+  
+  await tempSession.exec('analyze-data.sh');
+} finally {
+  await sandbox.deleteSession('temp-analysis');
+}
+```
+
+### Monitor session count
+
+Limit concurrent sessions to avoid resource exhaustion:
+
+```typescript
+const MAX_SESSIONS = 10;
+
+const sessions = await sandbox.listSessions();
+if (sessions.length >= MAX_SESSIONS) {
+  // Clean up oldest sessions
+  await sandbox.deleteSession(sessions[0].id);
+}
+```
+
+## Common patterns
+
+### Per-user sessions
+
+Isolate user workspaces:
+
+```typescript
+const userId = 'user-123';
+const userSession = await sandbox.createSession({
+  id: `user-${userId}`,
+  cwd: `/workspace/users/${userId}`
+});
+```
+
+### Build pipelines
+
+Create sessions for each pipeline stage:
+
+```typescript
+const stages = ['build', 'test', 'deploy'];
+
+for (const stage of stages) {
+  const session = await sandbox.createSession({
+    id: `pipeline-${stage}`,
+    cwd: '/workspace'
+  });
+  
+  await session.exec(`npm run ${stage}`);
+  await sandbox.deleteSession(`pipeline-${stage}`);
+}
+```
+
+### Parallel test execution
+
+Run test suites in parallel sessions:
+
+```typescript
+const testFiles = ['auth.test.js', 'api.test.js', 'db.test.js'];
+
+await Promise.all(
+  testFiles.map(async (file) => {
+    const session = await sandbox.createSession({
+      id: `test-${file}`
+    });
+    return session.exec(`npm test -- ${file}`);
+  })
+);
+```
+
+## Troubleshooting
+
+### Session not found errors
+
+Verify session exists before using:
+
+```typescript
+try {
+  const session = await sandbox.getSession('my-session');
+  await session.exec('pwd');
+} catch (error) {
+  if (error.code === 'SESSION_NOT_FOUND') {
+    // Create session if it doesn't exist
+    await sandbox.createSession({ id: 'my-session' });
+  }
+}
+```
+
+### State not persisting
+
+Ensure you're using the same session:
+
+```typescript
+// Wrong: Creates new default session each time
+await sandbox.exec('cd /tmp');
+await sandbox.exec('pwd'); // Might not be /tmp
+
+// Right: Explicit session reference
+const session = await sandbox.getSession('default');
+await session.exec('cd /tmp');
+await session.exec('pwd'); // Always /tmp
+```
+
+### Shell exits unexpectedly
+
+Avoid commands that terminate the shell:
+
+```typescript
+// Don't do this - kills the session shell
+await session.exec('exit');
+
+// Use process management instead
+const proc = await sandbox.startProcess({ command: 'server' });
+await sandbox.killProcess(proc.id);
+```

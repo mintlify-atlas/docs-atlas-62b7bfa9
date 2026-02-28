@@ -1,0 +1,118 @@
+---
+title: 'unexposePort'
+description: 'Remove port exposure and invalidate preview URL'
+---
+
+Removes port exposure and invalidates its preview URL. After calling this method, the preview URL will no longer work.
+
+## Method Signature
+
+```typescript
+await sandbox.unexposePort(
+  port: number
+): Promise<void>
+```
+
+## Parameters
+
+<ParamField path="port" type="number" required>
+  Port number to unexpose (1024-65535, excluding 3000)
+</ParamField>
+
+## Returns
+
+<ResponseField name="void" type="void">
+  Returns nothing on success. Throws an error if the port is not exposed or invalid.
+</ResponseField>
+
+## Examples
+
+### Unexpose a port
+
+```typescript
+// Expose port
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+
+console.log('Server at:', url);
+
+// Later, unexpose it
+await sandbox.unexposePort(8080);
+console.log('Port 8080 is no longer exposed');
+```
+
+### Clean up after process exits
+
+```typescript
+const process = await sandbox.startProcess('python -m http.server 8080');
+await process.waitForPort(8080);
+
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+
+console.log('Server at:', url);
+
+// Wait for process to exit
+await process.waitForExit();
+
+// Clean up port exposure
+await sandbox.unexposePort(8080);
+```
+
+### Unexpose multiple ports
+
+```typescript
+const exposedPorts = [3000, 8080, 9000];
+
+// Expose all
+for (const port of exposedPorts) {
+  await sandbox.exposePort(port, { hostname: 'example.com' });
+}
+
+// Later, unexpose all
+for (const port of exposedPorts) {
+  await sandbox.unexposePort(port);
+}
+```
+
+### Error handling
+
+```typescript
+try {
+  await sandbox.unexposePort(8080);
+  console.log('Port unexposed successfully');
+} catch (error) {
+  console.error('Failed to unexpose port:', error.message);
+}
+```
+
+## Behavior
+
+When you unexpose a port:
+
+1. The preview URL is immediately invalidated
+2. The port's authentication token is removed from storage
+3. Any subsequent requests to the preview URL will fail
+4. The service continues running in the sandbox (only external access is removed)
+
+```typescript
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+
+// This URL works
+await fetch(url); // ✓ Success
+
+await sandbox.unexposePort(8080);
+
+// This URL no longer works
+await fetch(url); // ✗ Fails
+```
+
+## Related Methods
+
+- [exposePort](/api/expose-port) - Expose a port with a preview URL
+- [listPorts](/api/list-ports) - List all exposed ports
+- [killProcess](/api/kill-process) - Kill a running process

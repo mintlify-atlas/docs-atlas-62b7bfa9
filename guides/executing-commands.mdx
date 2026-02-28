@@ -1,0 +1,301 @@
+---
+title: Executing commands
+description: Learn how to execute shell commands in sandboxes with streaming output, timeouts, and environment variables.
+---
+
+The Sandbox SDK provides flexible command execution through the `exec()` method. You can run any shell command and get immediate results, or stream output in real-time for long-running operations.
+
+## Basic command execution
+
+The simplest way to execute a command is with `exec()`, which waits for the command to complete and returns the full result:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+const result = await sandbox.exec('echo "Hello, World!"');
+
+console.log(result.stdout);  // "Hello, World!"
+console.log(result.exitCode); // 0
+console.log(result.success);  // true
+```
+
+## Understanding the result
+
+Every `exec()` call returns an `ExecResult` object with complete execution details:
+
+```typescript
+interface ExecResult {
+  success: boolean;      // true if exitCode === 0
+  exitCode: number;      // Process exit code
+  stdout: string;        // Standard output content
+  stderr: string;        // Standard error content
+  command: string;       // Command that was executed
+  duration: number;      // Execution time in milliseconds
+  timestamp: string;     // ISO timestamp when command started
+  sessionId?: string;    // Session ID if provided
+}
+```
+
+<CodeGroup>
+
+```typescript Success case
+const result = await sandbox.exec('python3 -c "print(2 + 2)"');
+// {
+//   success: true,
+//   exitCode: 0,
+//   stdout: "4\n",
+//   stderr: "",
+//   duration: 45
+// }
+```
+
+```typescript Error case
+const result = await sandbox.exec('cat nonexistent.txt');
+// {
+//   success: false,
+//   exitCode: 1,
+//   stdout: "",
+//   stderr: "cat: nonexistent.txt: No such file or directory\n",
+//   duration: 12
+// }
+```
+
+</CodeGroup>
+
+## Streaming output
+
+For long-running commands, stream output in real-time instead of waiting for completion:
+
+```typescript
+const result = await sandbox.exec('npm install', {
+  stream: true,
+  onOutput: (stream, data) => {
+    if (stream === 'stdout') {
+      console.log('Output:', data);
+    } else {
+      console.error('Error:', data);
+    }
+  },
+  onComplete: (result) => {
+    console.log('Command finished with exit code:', result.exitCode);
+  }
+});
+```
+
+<Note>
+Streaming is perfect for commands that produce incremental output like package installations, builds, or log tailing.
+</Note>
+
+## Command options
+
+Customize command execution with various options:
+
+### Timeout
+
+Set a maximum execution time to prevent commands from running indefinitely:
+
+```typescript
+try {
+  await sandbox.exec('sleep 10', {
+    timeout: 3000  // Timeout after 3 seconds
+  });
+} catch (error) {
+  console.error('Command timed out');
+}
+```
+
+### Environment variables
+
+Provide environment variables for a single command without affecting the session:
+
+```typescript
+const result = await sandbox.exec('echo $API_KEY', {
+  env: {
+    API_KEY: 'secret-key',
+    DEBUG: 'true'
+  }
+});
+```
+
+<Warning>
+Environment variables passed to `exec()` only apply to that specific command. They don't persist in the session. Use `setEnvVars()` for persistent environment variables.
+</Warning>
+
+### Working directory
+
+Change the working directory for a specific command:
+
+```typescript
+const result = await sandbox.exec('ls -la', {
+  cwd: '/workspace/project'
+});
+```
+
+### All options combined
+
+```typescript
+const result = await sandbox.exec('python script.py', {
+  timeout: 60000,  // 60 second timeout
+  env: {
+    PYTHONPATH: '/workspace/lib',
+    DEBUG: '1'
+  },
+  cwd: '/workspace/scripts',
+  stream: true,
+  onOutput: (stream, data) => {
+    console.log(`[${stream}]`, data);
+  },
+  onError: (error) => {
+    console.error('Execution failed:', error.message);
+  }
+});
+```
+
+## Chaining commands
+
+Use shell operators to chain multiple commands:
+
+```typescript
+// Run commands sequentially
+await sandbox.exec('cd /workspace && npm install && npm run build');
+
+// Run with conditional execution
+await sandbox.exec('test -f config.json || cp config.example.json config.json');
+
+// Pipe output between commands
+const result = await sandbox.exec('cat data.txt | grep "error" | wc -l');
+```
+
+## Running Python and Node.js
+
+The sandbox comes with Python 3.11 and Node.js 20 pre-installed:
+
+<CodeGroup>
+
+```typescript Python
+const result = await sandbox.exec(
+  'python3 -c "import sys; print(sys.version)"'
+);
+console.log(result.stdout);
+// "3.11.6 (main, ...)\n"
+```
+
+```typescript Node.js
+const result = await sandbox.exec(
+  'node -e "console.log(process.version)"'
+);
+console.log(result.stdout);
+// "v20.11.0\n"
+```
+
+```typescript Multiple files
+// Write Python script
+await sandbox.writeFile('/workspace/script.py', `
+import pandas as pd
+import matplotlib.pyplot as plt
+
+data = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+print(data.describe())
+`);
+
+// Execute it
+const result = await sandbox.exec('python3 /workspace/script.py');
+console.log(result.stdout);
+```
+
+</CodeGroup>
+
+## Error handling
+
+Always check command results for errors:
+
+```typescript
+const result = await sandbox.exec('make build');
+
+if (!result.success) {
+  console.error('Build failed!');
+  console.error('Exit code:', result.exitCode);
+  console.error('Error output:', result.stderr);
+  throw new Error(`Build failed with exit code ${result.exitCode}`);
+}
+
+console.log('Build succeeded:', result.stdout);
+```
+
+<Note>
+The `exec()` method doesn't throw errors for non-zero exit codes. Check `result.success` or `result.exitCode` to determine if the command succeeded.
+</Note>
+
+## Cancelling commands
+
+Use `AbortSignal` to cancel long-running commands:
+
+```typescript
+const controller = new AbortController();
+
+// Cancel after 5 seconds
+setTimeout(() => controller.abort(), 5000);
+
+try {
+  await sandbox.exec('long-running-process', {
+    signal: controller.signal
+  });
+} catch (error) {
+  if (error.message.includes('aborted')) {
+    console.log('Command was cancelled');
+  }
+}
+```
+
+## Best practices
+
+<Steps>
+
+### Use streaming for long operations
+
+Stream output for commands that take more than a few seconds. This provides user feedback and helps debug issues.
+
+### Set appropriate timeouts
+
+Always set timeouts for operations that might hang. This prevents resource exhaustion and provides better error messages.
+
+### Handle errors explicitly
+
+Check `result.success` before using command output. Non-zero exit codes indicate failures that need handling.
+
+### Escape special characters
+
+When constructing commands with user input, properly escape special characters or use command arrays:
+
+```typescript
+// Bad - vulnerable to injection
+await sandbox.exec(`cat ${userFilename}`);
+
+// Good - escape shell special characters
+import { shellEscape } from '@repo/shared';
+await sandbox.exec(`cat ${shellEscape(userFilename)}`);
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Managing files" icon="folder" href="/guides/managing-files">
+  Read, write, and organize files in your sandbox
+</Card>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Start long-running background processes
+</Card>
+
+<Card title="Code interpreter" icon="code" href="/guides/code-interpreter">
+  Execute Python and JavaScript with rich outputs
+</Card>
+
+<Card title="Streaming output" icon="stream" href="/guides/streaming-output">
+  Advanced streaming patterns and SSE events
+</Card>
+
+</CardGroup>

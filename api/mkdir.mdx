@@ -1,0 +1,128 @@
+---
+title: mkdir
+description: Create a directory in the sandbox
+---
+
+## Description
+
+Creates a directory at the specified path. Optionally creates parent directories if they don't exist.
+
+## Method Signature
+
+```typescript
+async mkdir(
+  path: string,
+  options?: { recursive?: boolean; sessionId?: string }
+): Promise<MkdirResult>
+```
+
+## Parameters
+
+<ParamField path="path" type="string" required>
+  Absolute path where the directory should be created
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration for the mkdir operation
+  
+  <ParamField path="recursive" type="boolean" default={false}>
+    Whether to create parent directories if they don't exist (equivalent to `mkdir -p`)
+  </ParamField>
+  
+  <ParamField path="sessionId" type="string">
+    Session ID to use for this operation. If not provided, the default session is used.
+  </ParamField>
+</ParamField>
+
+## Returns
+
+<ResponseField name="MkdirResult" type="object">
+  Result of the mkdir operation
+  
+  <ResponseField name="success" type="boolean">
+    Whether the directory was created successfully
+  </ResponseField>
+  
+  <ResponseField name="path" type="string">
+    Path to the directory that was created
+  </ResponseField>
+  
+  <ResponseField name="recursive" type="boolean">
+    Whether the operation was performed recursively
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="string">
+    ISO 8601 timestamp of when the operation completed
+  </ResponseField>
+  
+  <ResponseField name="exitCode" type="number">
+    Exit code from the underlying mkdir command (0 = success)
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Create a single directory
+
+```typescript
+const result = await sandbox.mkdir('/workspace/new-folder');
+console.log(result.success); // true
+```
+
+### Create nested directories
+
+```typescript
+// Create /workspace/a/b/c even if /workspace/a and /workspace/a/b don't exist
+const result = await sandbox.mkdir('/workspace/a/b/c', {
+  recursive: true
+});
+console.log(result.path); // '/workspace/a/b/c'
+```
+
+### Create directory in a specific session
+
+```typescript
+const session = await sandbox.createSession();
+await sandbox.mkdir('/workspace/session-dir', {
+  sessionId: session.id
+});
+```
+
+### Create directory before writing files
+
+```typescript
+// Ensure directory exists before writing
+await sandbox.mkdir('/workspace/data', { recursive: true });
+await sandbox.writeFile('/workspace/data/config.json', JSON.stringify(config));
+```
+
+## Error Handling
+
+The method throws an error if:
+- The directory already exists (not an error with `recursive: true`)
+- Parent directories don't exist (without `recursive: true`)
+- Insufficient permissions
+- The path is invalid
+
+```typescript
+try {
+  // This fails if /workspace/parent doesn't exist
+  await sandbox.mkdir('/workspace/parent/child');
+} catch (error) {
+  console.error('Failed to create directory:', error.message);
+  // Use recursive option instead
+  await sandbox.mkdir('/workspace/parent/child', { recursive: true });
+}
+```
+
+## Notes
+
+- Default directory permissions are typically 755 (rwxr-xr-x)
+- Using `recursive: true` is safe even if the directory already exists
+- The `/workspace` directory is the default working directory in sandboxes
+
+## See Also
+
+- [writeFile](/api/write-file) - Write content to a file
+- [listFiles](/api/list-files) - List directory contents
+- [deleteFile](/api/remove-file) - Delete files and directories

@@ -1,0 +1,174 @@
+---
+title: 'FileMetadata'
+description: 'Metadata about a file from streaming operations'
+---
+
+Represents metadata about a file when using streaming file operations, providing information about the file's type, size, and encoding.
+
+## Type Definition
+
+```typescript
+interface FileMetadata {
+  mimeType: string;
+  size: number;
+  isBinary: boolean;
+  encoding: 'utf-8' | 'base64';
+}
+```
+
+## Properties
+
+<ResponseField name="mimeType" type="string" required>
+  MIME type of the file (e.g., "text/plain", "image/png", "application/json")
+</ResponseField>
+
+<ResponseField name="size" type="number" required>
+  File size in bytes
+</ResponseField>
+
+<ResponseField name="isBinary" type="boolean" required>
+  Whether the file is detected as binary
+</ResponseField>
+
+<ResponseField name="encoding" type="'utf-8' | 'base64'" required>
+  Encoding used for streaming:
+  - `utf-8` for text files
+  - `base64` for binary files
+</ResponseField>
+
+## Example Usage
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Stream a file and get metadata
+const stream = await sandbox.readFileStream('/workspace/image.png');
+const reader = stream.getReader();
+const decoder = new TextDecoder();
+
+let metadata: FileMetadata | null = null;
+const chunks: Uint8Array[] = [];
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  const text = decoder.decode(value, { stream: true });
+  const lines = text.split('\n');
+  
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    
+    const event = JSON.parse(line.substring(6));
+    
+    if (event.type === 'metadata') {
+      metadata = {
+        mimeType: event.mimeType,
+        size: event.size,
+        isBinary: event.isBinary,
+        encoding: event.encoding
+      };
+      
+      console.log('File metadata:', metadata);
+      // mimeType: "image/png"
+      // size: 52431
+      // isBinary: true
+      // encoding: "base64"
+    }
+    
+    if (event.type === 'chunk' && metadata) {
+      if (metadata.isBinary) {
+        // Decode base64 chunk
+        const binary = atob(event.data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        chunks.push(bytes);
+      } else {
+        // UTF-8 text chunk
+        chunks.push(new TextEncoder().encode(event.data));
+      }
+    }
+  }
+}
+
+// Reconstruct file
+if (metadata) {
+  const blob = new Blob(chunks, { type: metadata.mimeType });
+  console.log('Reconstructed file size:', blob.size);
+}
+```
+
+## Example: Conditional Processing
+
+```typescript
+const stream = await sandbox.readFileStream(filePath);
+const reader = stream.getReader();
+
+let metadata: FileMetadata | null = null;
+
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  
+  const text = new TextDecoder().decode(value);
+  const event = JSON.parse(text.substring(6)); // Skip "data: "
+  
+  if (event.type === 'metadata') {
+    metadata = event as FileMetadata;
+    
+    // Choose processing based on file type
+    if (metadata.mimeType.startsWith('text/')) {
+      console.log('Processing text file...');
+    } else if (metadata.mimeType.startsWith('image/')) {
+      console.log('Processing image file...');
+    } else {
+      console.log('Unknown file type:', metadata.mimeType);
+    }
+    
+    // Check file size
+    if (metadata.size > 10_000_000) {
+      console.warn('Large file detected:', metadata.size, 'bytes');
+      reader.cancel();
+      break;
+    }
+  }
+}
+```
+
+## Common MIME Types
+
+Text files (UTF-8 encoding):
+- `text/plain` - Plain text
+- `text/html` - HTML
+- `text/css` - CSS
+- `application/json` - JSON
+- `application/javascript` - JavaScript
+- `text/csv` - CSV
+
+Binary files (base64 encoding):
+- `image/png` - PNG images
+- `image/jpeg` - JPEG images
+- `image/gif` - GIF images
+- `application/pdf` - PDF documents
+- `application/zip` - ZIP archives
+- `application/octet-stream` - Generic binary
+
+## Notes
+
+- Metadata is sent as the first event in the stream
+- MIME type detection is automatic based on file extension and content
+- Binary detection examines file content for non-text bytes
+- Base64 encoding adds ~33% overhead to binary file size during streaming
+- UTF-8 encoding is used for text files (no additional overhead)
+- Size reflects the original file size, not the encoded stream size
+- Use metadata to prepare appropriate decoding/processing logic
+
+## See Also
+
+- [readFileStream](/api/stream-file) - Stream file contents
+- [readFile](/api/read-file) - Read entire file at once
+- [FileInfo type](/api/types/file-metadata) - Directory listing metadata

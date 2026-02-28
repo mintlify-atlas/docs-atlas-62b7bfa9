@@ -1,0 +1,262 @@
+---
+title: 'Execution'
+description: 'Result type returned by code interpreter execution'
+---
+
+Represents the complete result of code execution, including outputs, results, errors, and execution context.
+
+## Type Definition
+
+```typescript
+class Execution {
+  public results: Result[] = [];
+  public logs = {
+    stdout: [] as string[],
+    stderr: [] as string[]
+  };
+  public error?: ExecutionError;
+  public executionCount?: number;
+  
+  constructor(
+    public readonly code: string,
+    public readonly context: CodeContext
+  );
+  
+  toJSON(): ExecutionResult;
+}
+
+interface ExecutionResult {
+  code: string;
+  logs: {
+    stdout: string[];
+    stderr: string[];
+  };
+  error?: ExecutionError;
+  executionCount?: number;
+  results: Array<{
+    text?: string;
+    html?: string;
+    png?: string;
+    jpeg?: string;
+    svg?: string;
+    latex?: string;
+    markdown?: string;
+    json?: any;
+    chart?: ChartData;
+    data?: any;
+  }>;
+}
+```
+
+## Properties
+
+<ResponseField name="code" type="string" required>
+  The code that was executed
+</ResponseField>
+
+<ResponseField name="context" type="CodeContext" required>
+  The context used for execution
+</ResponseField>
+
+<ResponseField name="results" type="Result[]" required>
+  Array of execution results (charts, tables, formatted output)
+</ResponseField>
+
+<ResponseField name="logs" type="object" required>
+  Accumulated output streams
+  <Expandable title="properties">
+    <ResponseField name="stdout" type="string[]" required>
+      Standard output lines
+    </ResponseField>
+    <ResponseField name="stderr" type="string[]" required>
+      Standard error lines
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="error" type="ExecutionError" optional>
+  Execution error if the code failed
+  <Expandable title="properties">
+    <ResponseField name="name" type="string" required>
+      Error name/type (e.g., "NameError", "SyntaxError")
+    </ResponseField>
+    <ResponseField name="message" type="string" required>
+      Error message
+    </ResponseField>
+    <ResponseField name="traceback" type="string[]" required>
+      Stack trace lines
+    </ResponseField>
+    <ResponseField name="lineNumber" type="number" optional>
+      Line number where error occurred
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="executionCount" type="number" optional>
+  Execution count (incremented for each execution in the context)
+</ResponseField>
+
+## Result Type
+
+Each result in the `results` array can contain multiple output formats:
+
+<ResponseField name="Result" type="object">
+  <Expandable title="properties">
+    <ResponseField name="text" type="string" optional>
+      Plain text representation
+    </ResponseField>
+    <ResponseField name="html" type="string" optional>
+      HTML representation (tables, formatted output)
+    </ResponseField>
+    <ResponseField name="png" type="string" optional>
+      PNG image data (base64 encoded)
+    </ResponseField>
+    <ResponseField name="jpeg" type="string" optional>
+      JPEG image data (base64 encoded)
+    </ResponseField>
+    <ResponseField name="svg" type="string" optional>
+      SVG image data
+    </ResponseField>
+    <ResponseField name="latex" type="string" optional>
+      LaTeX representation
+    </ResponseField>
+    <ResponseField name="markdown" type="string" optional>
+      Markdown representation
+    </ResponseField>
+    <ResponseField name="json" type="any" optional>
+      JSON data
+    </ResponseField>
+    <ResponseField name="chart" type="ChartData" optional>
+      Chart visualization data
+    </ResponseField>
+    <ResponseField name="formats()" type="function" required>
+      Returns array of available formats for this result
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Usage
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+import numpy as np
+
+print("Generating sine wave...")
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.show()
+`);
+
+// Access outputs
+console.log('Code:', execution.code);
+console.log('Context:', execution.context.id);
+console.log('Stdout:', execution.logs.stdout); // ["Generating sine wave..."]
+console.log('Results:', execution.results.length); // 1
+
+// Access chart
+if (execution.results[0]?.chart) {
+  const chart = execution.results[0].chart;
+  console.log('Chart type:', chart.type); // "line"
+  console.log('Chart library:', chart.library); // "matplotlib"
+  
+  // Get image
+  const image = execution.results[0].png;
+  console.log('Has image:', !!image);
+}
+
+// Check for errors
+if (execution.error) {
+  console.error('Error:', execution.error.name);
+  console.error('Message:', execution.error.message);
+  console.error('Traceback:', execution.error.traceback.join('\n'));
+}
+```
+
+## Example: Handling Multiple Results
+
+```typescript
+const execution = await sandbox.runCode(`
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Create and display a dataframe
+df = pd.DataFrame({
+  'name': ['Alice', 'Bob', 'Charlie'],
+  'age': [25, 30, 35]
+})
+print(df)
+
+# Create a chart
+plt.bar(df['name'], df['age'])
+plt.show()
+`);
+
+// First result is the dataframe (HTML table)
+if (execution.results[0]?.html) {
+  console.log('Dataframe HTML:', execution.results[0].html);
+}
+
+// Second result is the chart
+if (execution.results[1]?.chart) {
+  console.log('Chart:', execution.results[1].chart.type);
+}
+```
+
+## Example: Error Handling
+
+```typescript
+const execution = await sandbox.runCode(`
+x = 1 / 0  # ZeroDivisionError
+`);
+
+if (execution.error) {
+  console.error('Execution failed');
+  console.error('Error type:', execution.error.name); // "ZeroDivisionError"
+  console.error('Message:', execution.error.message);
+  
+  // Format traceback for display
+  const traceback = execution.error.traceback.join('\n');
+  console.error('Traceback:\n', traceback);
+}
+```
+
+## Example: Serialization
+
+```typescript
+const execution = await sandbox.runCode('print("Hello")');
+
+// Convert to plain object for storage/transmission
+const json = execution.toJSON();
+
+// Store in KV or database
+await env.KV.put('execution:latest', JSON.stringify(json));
+
+// Or return to client
+return Response.json(json);
+```
+
+## Notes
+
+- `Execution` is a class with methods, `ExecutionResult` is a plain object
+- Results are ordered by execution order
+- Multiple results can be produced by a single code execution
+- Charts are automatically detected from matplotlib, plotly, altair, seaborn
+- Results support multiple formats - use `formats()` to check availability
+- Logs are accumulated line-by-line as strings
+- Use `toJSON()` to serialize for storage or transmission
+- Context reference is included for re-execution
+
+## See Also
+
+- [runCode](/api/code-interpreter/run-code) - Execute code
+- [CodeContext](/api/types/code-context) - Execution context type
+- [Result type documentation](#result-type) - Available output formats

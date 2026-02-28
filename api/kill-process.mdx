@@ -1,0 +1,86 @@
+---
+title: 'killProcess'
+description: 'Kill a running background process'
+---
+
+Terminates a background process by its ID. The process will be sent a termination signal.
+
+## Method Signature
+
+```typescript
+await sandbox.killProcess(
+  id: string,
+  signal?: string,
+  sessionId?: string
+): Promise<void>
+```
+
+## Parameters
+
+<ParamField path="id" type="string" required>
+  The process ID to kill
+</ParamField>
+
+<ParamField path="signal" type="string">
+  Signal to send to the process (currently not supported by the HTTP client)
+</ParamField>
+
+<ParamField path="sessionId" type="string">
+  Optional session ID. If not provided, the default session is used.
+</ParamField>
+
+## Returns
+
+<ResponseField name="void" type="void">
+  Returns nothing on success. Throws an error if the process is not found or cannot be killed.
+</ResponseField>
+
+## Examples
+
+### Kill a process by ID
+
+```typescript
+await sandbox.killProcess('dev-server');
+console.log('Process killed');
+```
+
+### Kill process from Process object
+
+```typescript
+const process = await sandbox.startProcess('python server.py');
+
+// Later...
+await process.kill();
+```
+
+### Kill with error handling
+
+```typescript
+try {
+  await sandbox.killProcess('my-process');
+  console.log('Process terminated successfully');
+} catch (error) {
+  console.error('Failed to kill process:', error.message);
+}
+```
+
+### Kill all processes matching a pattern
+
+```typescript
+const processes = await sandbox.listProcesses();
+const servers = processes.filter(p => 
+  p.command.includes('server') && p.status === 'running'
+);
+
+for (const process of servers) {
+  await sandbox.killProcess(process.id);
+}
+
+console.log(`Killed ${servers.length} server processes`);
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a new background process
+- [listProcesses](/api/list-processes) - List all processes
+- [getProcess](/api/get-process) - Get information about a specific process

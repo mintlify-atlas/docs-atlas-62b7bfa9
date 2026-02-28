@@ -1,0 +1,196 @@
+---
+title: 'startProcess'
+description: 'Start a background process in the sandbox'
+---
+
+Starts a long-running background process in the sandbox. Use this for servers, services, and any command that should continue running after the initial call returns.
+
+## Method Signature
+
+```typescript
+await sandbox.startProcess(
+  command: string,
+  options?: ProcessOptions,
+  sessionId?: string
+): Promise<Process>
+```
+
+## Parameters
+
+<ParamField path="command" type="string" required>
+  The command to execute as a background process
+
+  ```typescript
+  "python -m http.server 8080"
+  ```
+</ParamField>
+
+<ParamField path="options" type="ProcessOptions">
+  Configuration options for the process
+
+  <Expandable title="ProcessOptions">
+    <ParamField path="processId" type="string">
+      Custom process ID for later reference. If not provided, a UUID will be generated.
+    </ParamField>
+
+    <ParamField path="timeout" type="number">
+      Maximum execution time in milliseconds
+    </ParamField>
+
+    <ParamField path="env" type="Record<string, string | undefined>">
+      Environment variables for this process. Values temporarily override session-level env vars.
+    </ParamField>
+
+    <ParamField path="cwd" type="string">
+      Working directory for the process
+    </ParamField>
+
+    <ParamField path="encoding" type="string" default="utf8">
+      Text encoding for output
+    </ParamField>
+
+    <ParamField path="autoCleanup" type="boolean" default={true}>
+      Automatically cleanup process record after exit
+    </ParamField>
+
+    <ParamField path="onExit" type="(code: number | null) => void">
+      Callback when process exits
+    </ParamField>
+
+    <ParamField path="onOutput" type="(stream: 'stdout' | 'stderr', data: string) => void">
+      Callback for real-time output
+    </ParamField>
+
+    <ParamField path="onStart" type="(process: Process) => void">
+      Callback when process starts successfully
+    </ParamField>
+
+    <ParamField path="onError" type="(error: Error) => void">
+      Callback for process errors
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="sessionId" type="string">
+  Optional session ID. If not provided, the default session is used.
+</ParamField>
+
+## Returns
+
+<ResponseField name="Process" type="Process">
+  A Process object with methods for interacting with the running process
+
+  <Expandable title="Process">
+    <ResponseField name="id" type="string">
+      Unique process identifier
+    </ResponseField>
+
+    <ResponseField name="pid" type="number">
+      System process ID (if available and running)
+    </ResponseField>
+
+    <ResponseField name="command" type="string">
+      Command that was executed
+    </ResponseField>
+
+    <ResponseField name="status" type="ProcessStatus">
+      Current process status: `'starting'` | `'running'` | `'completed'` | `'failed'` | `'killed'` | `'error'`
+    </ResponseField>
+
+    <ResponseField name="startTime" type="Date">
+      When the process was started
+    </ResponseField>
+
+    <ResponseField name="endTime" type="Date">
+      When the process ended (if completed)
+    </ResponseField>
+
+    <ResponseField name="exitCode" type="number">
+      Process exit code (if completed)
+    </ResponseField>
+
+    <ResponseField name="sessionId" type="string">
+      Session ID if provided
+    </ResponseField>
+
+    <ResponseField name="kill" type="(signal?: string) => Promise<void>">
+      Kill the process
+    </ResponseField>
+
+    <ResponseField name="getStatus" type="() => Promise<ProcessStatus>">
+      Get current process status (refreshed)
+    </ResponseField>
+
+    <ResponseField name="getLogs" type="() => Promise<{ stdout: string; stderr: string }>">
+      Get accumulated logs
+    </ResponseField>
+
+    <ResponseField name="waitForLog" type="(pattern: string | RegExp, timeout?: number) => Promise<WaitForLogResult>">
+      Wait for a log pattern to appear in process output
+    </ResponseField>
+
+    <ResponseField name="waitForPort" type="(port: number, options?: WaitForPortOptions) => Promise<void>">
+      Wait for a port to become ready
+    </ResponseField>
+
+    <ResponseField name="waitForExit" type="(timeout?: number) => Promise<WaitForExitResult>">
+      Wait for the process to exit
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Start a web server
+
+```typescript
+const process = await sandbox.startProcess('python -m http.server 8080');
+console.log('Server started:', process.id);
+```
+
+### Start with custom process ID
+
+```typescript
+const process = await sandbox.startProcess(
+  'npm run dev',
+  { processId: 'dev-server' }
+);
+```
+
+### Monitor process output
+
+```typescript
+const process = await sandbox.startProcess(
+  'python train.py',
+  {
+    onOutput: (stream, data) => {
+      console.log(`[${stream}]:`, data);
+    },
+    onExit: (code) => {
+      console.log('Process exited with code:', code);
+    }
+  }
+);
+```
+
+### Start with environment variables
+
+```typescript
+const process = await sandbox.startProcess(
+  'node server.js',
+  {
+    env: {
+      PORT: '3000',
+      NODE_ENV: 'production'
+    }
+  }
+);
+```
+
+## Related Methods
+
+- [listProcesses](/api/list-processes) - List all running processes
+- [getProcess](/api/get-process) - Get information about a specific process
+- [killProcess](/api/kill-process) - Kill a running process
+- [waitForLog](/api/wait-for-log) - Wait for log output
+- [waitForPort](/api/wait-for-port) - Wait for port readiness

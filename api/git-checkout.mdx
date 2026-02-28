@@ -1,0 +1,167 @@
+---
+title: 'gitCheckout'
+description: 'Clone a Git repository into the sandbox filesystem'
+---
+
+Clones a Git repository into the sandbox filesystem, supporting custom branches, shallow clones, and authenticated repositories.
+
+## Method Signature
+
+```typescript
+async gitCheckout(
+  repoUrl: string,
+  options?: {
+    branch?: string;
+    targetDir?: string;
+    depth?: number;
+  }
+): Promise<GitCheckoutResult>
+```
+
+## Parameters
+
+<ParamField path="repoUrl" type="string" required>
+  URL of the Git repository to clone. Supports HTTPS and SSH URLs.
+</ParamField>
+
+<ParamField path="options" type="object" optional>
+  Clone options
+  
+  <Expandable title="properties">
+    <ParamField path="branch" type="string" optional>
+      Branch to checkout. If not specified, uses the repository's default branch.
+    </ParamField>
+    
+    <ParamField path="targetDir" type="string" optional>
+      Target directory for the clone. If not specified, automatically derives from repository name (e.g., `/workspace/repo-name`).
+    </ParamField>
+    
+    <ParamField path="depth" type="number" optional>
+      Clone depth for shallow clones. Set to `1` for latest commit only. Reduces clone time and disk usage.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="GitCheckoutResult" type="object">
+  Result of the git clone operation
+  
+  <Expandable title="properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the clone succeeded
+    </ResponseField>
+    
+    <ResponseField name="repoUrl" type="string" required>
+      The repository URL that was cloned
+    </ResponseField>
+    
+    <ResponseField name="branch" type="string" required>
+      The branch that was checked out
+    </ResponseField>
+    
+    <ResponseField name="targetDir" type="string" required>
+      The directory where the repository was cloned
+    </ResponseField>
+    
+    <ResponseField name="timestamp" type="string" required>
+      ISO timestamp of the operation
+    </ResponseField>
+    
+    <ResponseField name="exitCode" type="number" optional>
+      Git command exit code
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Clone a public repository
+const result = await sandbox.gitCheckout(
+  'https://github.com/cloudflare/sandbox-sdk'
+);
+
+console.log('Cloned to:', result.targetDir); // /workspace/sandbox-sdk
+console.log('Branch:', result.branch); // main
+```
+
+## Example: Shallow Clone
+
+```typescript
+// Clone only the latest commit for faster cloning
+const result = await sandbox.gitCheckout(
+  'https://github.com/large/repository',
+  {
+    depth: 1,
+    targetDir: '/workspace/my-repo'
+  }
+);
+```
+
+## Example: Specific Branch
+
+```typescript
+const result = await sandbox.gitCheckout(
+  'https://github.com/user/repo',
+  {
+    branch: 'develop',
+    targetDir: '/workspace/dev'
+  }
+);
+```
+
+## Example: Private Repository with Token
+
+```typescript
+// Use personal access token in URL
+const token = env.GITHUB_TOKEN;
+const result = await sandbox.gitCheckout(
+  `https://${token}@github.com/user/private-repo`
+);
+
+// Or set up SSH key beforehand
+await sandbox.exec('mkdir -p ~/.ssh');
+await sandbox.writeFile('~/.ssh/id_rsa', env.SSH_PRIVATE_KEY);
+await sandbox.exec('chmod 600 ~/.ssh/id_rsa');
+
+const result = await sandbox.gitCheckout(
+  'git@github.com:user/private-repo.git'
+);
+```
+
+## Error Handling
+
+Throws an error if:
+- Repository URL is invalid
+- Repository does not exist or is not accessible
+- Branch does not exist
+- Target directory already exists
+- Insufficient disk space
+- Authentication fails (for private repos)
+
+```typescript
+try {
+  await sandbox.gitCheckout('https://github.com/invalid/repo');
+} catch (error) {
+  console.error('Clone failed:', error.message);
+}
+```
+
+## Notes
+
+- Credentials in URLs are automatically redacted from logs
+- Target directory is created if it doesn't exist
+- Cloning large repositories may take time - consider using `depth: 1`
+- SSH keys must be set up before cloning SSH URLs
+- Supports GitHub, GitLab, Bitbucket, and any Git server
+- Default branch is used when `branch` is not specified
+
+## See Also
+
+- [exec](/api/exec) - Run git commands directly
+- [listFiles](/api/list-files) - List cloned repository files

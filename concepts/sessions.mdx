@@ -1,0 +1,336 @@
+---
+title: Sessions
+description: Isolated execution contexts for parallel workloads and state management
+---
+
+## Overview
+
+Sessions provide isolated execution contexts within a single sandbox. Each session maintains its own:
+
+- Working directory
+- Environment variables
+- Shell state (functions, aliases)
+- Command history
+
+This enables parallel workloads in the same container without interference.
+
+## Default session
+
+When you use the sandbox without explicitly creating sessions, all operations use a default session:
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'my-project');
+
+// These all use the default session
+await sandbox.exec('cd /workspace');
+await sandbox.exec('export API_KEY=secret');
+await sandbox.exec('echo $API_KEY'); // Output: "secret"
+```
+
+The default session is automatically created on first use with:
+- Working directory: `/workspace`
+- Environment variables: from `setEnvVars()` calls
+- Session ID: `sandbox-{sandboxId}`
+
+## Creating sessions
+
+Create custom sessions for isolated workloads:
+
+```typescript
+const session = await sandbox.createSession({
+  id: 'user-task-123',        // Optional custom ID
+  name: 'Data Processing',     // Optional name for debugging
+  cwd: '/workspace/tasks',     // Initial working directory
+  env: {
+    TASK_ID: '123',
+    DEBUG: 'true'
+  }
+});
+```
+
+<Note>
+If you don't provide an `id`, a UUID is automatically generated.
+</Note>
+
+## Using sessions
+
+Session objects provide the same API as the main sandbox:
+
+```typescript
+const session = await sandbox.createSession({
+  cwd: '/workspace/ml',
+  env: { MODEL_PATH: '/models/v1' }
+});
+
+// Execute commands in this session
+const result = await session.exec('python train.py');
+
+// Start background processes
+const process = await session.startProcess('tensorboard --logdir logs/');
+
+// File operations
+await session.writeFile('/workspace/ml/config.json', config);
+const data = await session.readFile('/workspace/ml/output.json');
+
+// Git operations
+await session.gitCheckout('https://github.com/user/repo.git');
+```
+
+### Session API
+
+All session methods:
+
+```typescript
+interface ExecutionSession {
+  readonly id: string;
+  
+  // Command execution
+  exec(command: string, options?: ExecOptions): Promise<ExecResult>;
+  execStream(command: string, options?: StreamOptions): Promise<ReadableStream>;
+  
+  // Process management
+  startProcess(command: string, options?: ProcessOptions): Promise<Process>;
+  listProcesses(): Promise<Process[]>;
+  getProcess(id: string): Promise<Process | null>;
+  killProcess(id: string, signal?: string): Promise<void>;
+  killAllProcesses(): Promise<number>;
+  cleanupCompletedProcesses(): Promise<number>;
+  getProcessLogs(id: string): Promise<{stdout: string; stderr: string}>;
+  streamProcessLogs(id: string): Promise<ReadableStream>;
+  
+  // File operations
+  writeFile(path: string, content: string, options?): Promise<WriteFileResult>;
+  readFile(path: string, options?): Promise<ReadFileResult>;
+  readFileStream(path: string): Promise<ReadableStream>;
+  mkdir(path: string, options?): Promise<MkdirResult>;
+  deleteFile(path: string): Promise<DeleteFileResult>;
+  renameFile(oldPath: string, newPath: string): Promise<RenameFileResult>;
+  moveFile(src: string, dest: string): Promise<MoveFileResult>;
+  listFiles(path: string, options?): Promise<ListFilesResult>;
+  exists(path: string): Promise<FileExistsResult>;
+  
+  // Git operations
+  gitCheckout(repoUrl: string, options?): Promise<GitCheckoutResult>;
+  
+  // Environment
+  setEnvVars(vars: Record<string, string>): Promise<void>;
+  
+  // Code interpreter
+  createCodeContext(options?): Promise<CodeContext>;
+  runCode(code: string, options?): Promise<ExecutionResult>;
+  runCodeStream(code: string, options?): Promise<ReadableStream>;
+  listCodeContexts(): Promise<CodeContext[]>;
+  deleteCodeContext(contextId: string): Promise<void>;
+  
+  // Storage
+  mountBucket(bucket: string, mountPath: string, options): Promise<void>;
+  unmountBucket(mountPath: string): Promise<void>;
+  
+  // Backups
+  createBackup(options: BackupOptions): Promise<DirectoryBackup>;
+  restoreBackup(backup: DirectoryBackup): Promise<RestoreBackupResult>;
+  
+  // Terminal
+  terminal(request: Request, options?: PtyOptions): Promise<Response>;
+}
+```
+
+## Session isolation
+
+Each session has isolated state:
+
+```typescript
+const session1 = await sandbox.createSession({ id: 's1' });
+const session2 = await sandbox.createSession({ id: 's2' });
+
+// Session 1: Set working directory
+await session1.exec('cd /workspace/project-a');
+await session1.exec('export ENV=production');
+
+// Session 2: Different working directory
+await session2.exec('cd /workspace/project-b');
+await session2.exec('export ENV=development');
+
+// Each session maintains its own state
+const pwd1 = await session1.exec('pwd');
+console.log(pwd1.stdout); // /workspace/project-a
+
+const pwd2 = await session2.exec('pwd');
+console.log(pwd2.stdout); // /workspace/project-b
+
+const env1 = await session1.exec('echo $ENV');
+console.log(env1.stdout); // production
+
+const env2 = await session2.exec('echo $ENV');
+console.log(env2.stdout); // development
+```
+
+## Parallel execution
+
+Run multiple workloads concurrently:
+
+```typescript
+const [result1, result2, result3] = await Promise.all([
+  session1.exec('python process_batch_1.py'),
+  session2.exec('python process_batch_2.py'),
+  session3.exec('python process_batch_3.py')
+]);
+```
+
+Each session executes independently without blocking others.
+
+## Use cases
+
+### Multi-tenant workloads
+
+```typescript
+// Create isolated sessions for different users
+const userSession = await sandbox.createSession({
+  id: `user-${userId}`,
+  cwd: `/workspace/users/${userId}`,
+  env: { USER_ID: userId }
+});
+
+// User's commands are isolated from others
+await userSession.exec('python user-script.py');
+```
+
+### Pipeline stages
+
+```typescript
+// Data ingestion stage
+const ingest = await sandbox.createSession({
+  name: 'Ingestion',
+  cwd: '/workspace/data/raw'
+});
+await ingest.exec('python fetch_data.py');
+
+// Processing stage
+const process = await sandbox.createSession({
+  name: 'Processing',
+  cwd: '/workspace/data/processed'
+});
+await process.exec('python transform.py');
+
+// Analysis stage
+const analyze = await sandbox.createSession({
+  name: 'Analysis',
+  cwd: '/workspace/results'
+});
+await analyze.exec('python analyze.py');
+```
+
+### Testing isolation
+
+```typescript
+// Run tests in isolated sessions
+const testSessions = await Promise.all(
+  testSuites.map(suite => 
+    sandbox.createSession({
+      name: `Test: ${suite.name}`,
+      env: { TEST_SUITE: suite.name }
+    })
+  )
+);
+
+const results = await Promise.all(
+  testSessions.map(session => session.exec('npm test'))
+);
+```
+
+## Deleting sessions
+
+Clean up sessions when finished:
+
+```typescript
+const session = await sandbox.createSession({ id: 'temp' });
+
+try {
+  await session.exec('python script.py');
+} finally {
+  // Clean up
+  await sandbox.deleteSession('temp');
+}
+```
+
+<Warning>
+Deleting a session kills all processes started in that session.
+</Warning>
+
+## Retrieving sessions
+
+Get an existing session by ID:
+
+```typescript
+const session = await sandbox.getSession('user-task-123');
+
+if (session) {
+  // Continue using the session
+  await session.exec('echo "Resuming work..."');
+}
+```
+
+## Session persistence
+
+Sessions persist across requests to the same Durable Object:
+
+```typescript
+// Request 1: Create session
+export default {
+  async fetch(request, env) {
+    const sandbox = getSandbox(env.SANDBOX, 'project');
+    const session = await sandbox.createSession({ id: 'my-session' });
+    await session.exec('cd /workspace');
+    return new Response('Session created');
+  }
+};
+
+// Request 2: Use existing session
+export default {
+  async fetch(request, env) {
+    const sandbox = getSandbox(env.SANDBOX, 'project');
+    const session = await sandbox.getSession('my-session');
+    
+    // Working directory is still /workspace
+    const result = await session.exec('pwd');
+    return new Response(result.stdout);
+  }
+};
+```
+
+<Note>
+Sessions are lost when the container sleeps. They must be recreated on the next request.
+</Note>
+
+## Architecture
+
+Sessions are implemented as bash shells:
+
+```
+Container
+  ├── Session: sandbox-default
+  │   └── bash shell (persistent state)
+  ├── Session: user-123
+  │   └── bash shell (persistent state)
+  └── Session: task-456
+      └── bash shell (persistent state)
+```
+
+Each session runs commands in its own bash instance, maintaining:
+- Current working directory via shell state
+- Environment variables in shell environment
+- Shell functions and aliases
+- Command history
+
+The container runtime manages session lifecycle and command routing.
+
+## Limitations
+
+- **Process visibility**: Background processes started in one session are not visible in other sessions (but `listProcesses()` is sandbox-scoped)
+- **File system**: All sessions share the same file system (not isolated)
+- **Resource limits**: All sessions share container resources (CPU, memory)
+- **Session IDs**: Must be unique within a sandbox
+
+<Tip>
+For true process isolation, use the `isolation` option when creating sessions (requires `CAP_SYS_ADMIN` capability).
+</Tip>

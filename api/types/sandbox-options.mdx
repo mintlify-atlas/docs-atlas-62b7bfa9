@@ -1,0 +1,232 @@
+---
+title: 'SandboxOptions'
+description: 'Configuration options for sandbox instances'
+---
+
+Options for configuring sandbox behavior, timeouts, and lifecycle management.
+
+## Type Definition
+
+```typescript
+interface SandboxOptions {
+  sleepAfter?: string | number;
+  baseUrl?: string;
+  keepAlive?: boolean;
+  normalizeId?: boolean;
+  containerTimeouts?: {
+    instanceGetTimeoutMS?: number;
+    portReadyTimeoutMS?: number;
+    waitIntervalMS?: number;
+  };
+}
+```
+
+## Properties
+
+<ResponseField name="sleepAfter" type="string | number" default="'10m'">
+  Duration after which the sandbox will sleep if no requests are received.
+  
+  Can be:
+  - A string like `"30s"`, `"3m"`, `"5m"`, `"1h"` (seconds, minutes, or hours)
+  - A number representing seconds (e.g., `180` for 3 minutes)
+  
+  Ignored when `keepAlive` is `true`.
+</ResponseField>
+
+<ResponseField name="baseUrl" type="string" optional>
+  Base URL for the sandbox API (advanced use cases)
+</ResponseField>
+
+<ResponseField name="keepAlive" type="boolean" default={false}>
+  Keep the container alive indefinitely by preventing automatic shutdown.
+  
+  When `true`:
+  - Container never auto-sleeps
+  - Must call `sandbox.destroy()` explicitly to cleanup
+  - Use for long-running services or when activity can't be automatically detected
+  
+  **Important:** Call `sandbox.destroy()` when done to avoid resource leaks.
+</ResponseField>
+
+<ResponseField name="normalizeId" type="boolean" default={false}>
+  Normalize sandbox ID to lowercase for preview URL compatibility.
+  
+  Required for preview URLs because hostnames are case-insensitive (RFC 3986).
+  
+  **Important:** Different `normalizeId` values create different Durable Object instances:
+  - `getSandbox(ns, "MyProject")` → DO key: `"MyProject"`
+  - `getSandbox(ns, "MyProject", {normalizeId: true})` → DO key: `"myproject"`
+  
+  **Future change:** Will default to `true` in a future version. To prepare:
+  - Use lowercase IDs, or
+  - Explicitly pass `normalizeId: true`
+</ResponseField>
+
+<ResponseField name="containerTimeouts" type="object" optional>
+  Container startup timeout configuration. Tune based on container characteristics.
+  
+  Can also be configured via environment variables:
+  - `SANDBOX_INSTANCE_TIMEOUT_MS`
+  - `SANDBOX_PORT_TIMEOUT_MS`
+  - `SANDBOX_POLL_INTERVAL_MS`
+  
+  Precedence: options > env vars > SDK defaults
+  
+  <Expandable title="properties">
+    <ResponseField name="instanceGetTimeoutMS" type="number" default={30000}>
+      Time to wait for container instance provisioning (in milliseconds)
+      
+      Range: 5,000 - 300,000 (5s - 5min)
+    </ResponseField>
+    
+    <ResponseField name="portReadyTimeoutMS" type="number" default={90000}>
+      Time to wait for application startup and ports to be ready (in milliseconds)
+      
+      Range: 10,000 - 600,000 (10s - 10min)
+    </ResponseField>
+    
+    <ResponseField name="waitIntervalMS" type="number" default={1000}>
+      How often to poll for container readiness (in milliseconds)
+      
+      Range: 100 - 5,000 (100ms - 5s)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example: Basic Configuration
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(
+  env.SANDBOX,
+  'my-sandbox',
+  {
+    sleepAfter: '30m',
+    normalizeId: true
+  }
+);
+```
+
+## Example: Keep Alive for Long-Running Service
+
+```typescript
+const sandbox = getSandbox(
+  env.SANDBOX,
+  'websocket-server',
+  {
+    keepAlive: true
+  }
+);
+
+// Start server
+await sandbox.startProcess('node server.js');
+
+// Server runs indefinitely
+// Must cleanup manually:
+process.on('SIGTERM', async () => {
+  await sandbox.destroy();
+});
+```
+
+## Example: Heavy Container Timeouts
+
+```typescript
+// For containers with ML models or large dependencies
+const sandbox = getSandbox(
+  env.SANDBOX,
+  'ml-inference',
+  {
+    containerTimeouts: {
+      portReadyTimeoutMS: 180_000, // 3 minutes
+      instanceGetTimeoutMS: 60_000  // 1 minute
+    }
+  }
+);
+```
+
+## Example: Fail-Fast Configuration
+
+```typescript
+// For latency-sensitive applications
+const sandbox = getSandbox(
+  env.SANDBOX,
+  'api-backend',
+  {
+    containerTimeouts: {
+      instanceGetTimeoutMS: 15_000,
+      portReadyTimeoutMS: 30_000
+    },
+    sleepAfter: '5m'
+  }
+);
+```
+
+## Example: Environment Variable Timeouts
+
+```toml
+# wrangler.toml
+[env.production.vars]
+SANDBOX_INSTANCE_TIMEOUT_MS = "45000"
+SANDBOX_PORT_TIMEOUT_MS = "120000"
+SANDBOX_POLL_INTERVAL_MS = "500"
+```
+
+```typescript
+// Timeouts read from env vars automatically
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Or override specific values
+const sandbox = getSandbox(
+  env.SANDBOX,
+  'my-sandbox',
+  {
+    containerTimeouts: {
+      portReadyTimeoutMS: 60_000 // Override just this one
+    }
+  }
+);
+```
+
+## Timeout Configuration Guide
+
+### Default Settings (Most Use Cases)
+```typescript
+// SDK defaults work for most applications
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+// instanceGetTimeoutMS: 30s
+// portReadyTimeoutMS: 90s
+```
+
+### Heavy Containers
+```typescript
+// Containers with large dependencies, ML models
+containerTimeouts: {
+  portReadyTimeoutMS: 180_000 // 3 minutes
+}
+```
+
+### Fail-Fast Applications
+```typescript
+// Latency-sensitive apps that need quick feedback
+containerTimeouts: {
+  instanceGetTimeoutMS: 15_000,
+  portReadyTimeoutMS: 30_000
+}
+```
+
+## Notes
+
+- Options are set when calling `getSandbox()`, not when creating the namespace
+- Container timeouts can be configured per-sandbox or globally via env vars
+- `normalizeId` affects Durable Object routing - different values create different instances
+- `keepAlive: true` requires manual cleanup to avoid resource leaks
+- Sleep timeout resets on each request
+- Sleeping sandboxes restart automatically on next request
+- Startup timeouts account for container provisioning delays
+
+## See Also
+
+- [getSandbox](/api/get-sandbox) - Create sandbox instances
+- [Sandbox](/api/sandbox) - Sandbox class reference
+- [Performance Guide](/advanced/performance-optimization) - Optimization tips

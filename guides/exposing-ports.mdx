@@ -1,0 +1,449 @@
+---
+title: Exposing ports
+description: Make internal services publicly accessible with preview URLs that route traffic to sandbox ports.
+---
+
+Expose internal services running in your sandbox to the internet with preview URLs. Perfect for web servers, APIs, WebSocket services, and any network service that needs external access.
+
+## Quick start
+
+Expose a port to get a public URL:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Start a web server
+const server = await sandbox.startProcess('python3 -m http.server 8000');
+
+// Wait for server to be ready
+await server.waitForPort(8000);
+
+// Expose the port
+const exposed = await sandbox.exposePort(8000);
+
+console.log(`Server available at: ${exposed.url}`);
+// https://8000-my-sandbox.example.workers.dev
+```
+
+<Warning>
+Preview URLs require a custom domain with wildcard DNS (e.g., `*.yourdomain.com`). The default `.workers.dev` domain does not support the subdomain patterns needed for preview URLs. See the [production deployment guide](https://developers.cloudflare.com/sandbox/deploy/) for setup instructions.
+</Warning>
+
+## How preview URLs work
+
+When you expose a port, the SDK:
+
+1. Generates a unique token for secure access
+2. Creates a subdomain URL pointing to your sandbox
+3. Routes requests to the specified port inside the container
+
+The URL format is: `https://{port}-{sandbox-id}.{your-domain}`
+
+## Exposing with custom names
+
+Assign names to ports for easier identification:
+
+```typescript
+// Expose with a descriptive name
+const exposed = await sandbox.exposePort(8000, 'web-server');
+
+console.log(`Name: ${exposed.name}`);
+console.log(`URL: ${exposed.url}`);
+console.log(`Port: ${exposed.port}`);
+```
+
+## Waiting for port readiness
+
+Always wait for services to be ready before exposing:
+
+```typescript
+const server = await sandbox.startProcess('node server.js');
+
+// Wait for HTTP 200 response
+await server.waitForPort(3000, {
+  mode: 'http',
+  path: '/health',
+  timeout: 30000
+});
+
+// Now safe to expose
+const exposed = await sandbox.exposePort(3000);
+```
+
+### Port readiness options
+
+<CodeGroup>
+
+```typescript HTTP health check
+await server.waitForPort(3000, {
+  mode: 'http',
+  path: '/health',       // Endpoint to check
+  status: 200,           // Expected status code
+  timeout: 30000,        // Max wait time
+  interval: 500          // Check interval
+});
+```
+
+```typescript TCP connection
+// Just verify port accepts connections
+await server.waitForPort(3000, {
+  mode: 'tcp',
+  timeout: 10000
+});
+```
+
+```typescript Status range
+// Accept any successful status
+await server.waitForPort(3000, {
+  mode: 'http',
+  status: { min: 200, max: 299 }
+});
+```
+
+</CodeGroup>
+
+## Managing exposed ports
+
+### List all exposed ports
+
+```typescript
+const result = await sandbox.getExposedPorts();
+
+result.ports.forEach(port => {
+  console.log(`Port ${port.port}: ${port.url}`);
+  if (port.name) {
+    console.log(`  Name: ${port.name}`);
+  }
+});
+```
+
+### Close exposed ports
+
+```typescript
+// Close a specific port
+await sandbox.closePort(8000);
+
+// Verify it's closed
+const ports = await sandbox.getExposedPorts();
+const isOpen = ports.ports.some(p => p.port === 8000);
+console.log('Port 8000 exposed:', isOpen);  // false
+```
+
+## Common patterns
+
+### Development server
+
+```typescript
+// Start Vite dev server
+const dev = await sandbox.startProcess('npm run dev');
+
+// Wait for "Local: http://localhost:5173"
+await dev.waitForLog(/Local: http:\/\/localhost:(\d+)/);
+
+// Expose the port
+const exposed = await sandbox.exposePort(5173, 'vite-dev');
+
+return Response.json({
+  message: 'Dev server running',
+  url: exposed.url
+});
+```
+
+### API server
+
+```typescript
+// Start Express server
+await sandbox.writeFile('/workspace/server.js', `
+const express = require('express');
+const app = express();
+
+app.get('/api/hello', (req, res) => {
+  res.json({ message: 'Hello from sandbox!' });
+});
+
+app.listen(3000, () => {
+  console.log('Server ready');
+});
+`);
+
+const server = await sandbox.startProcess('node server.js');
+await server.waitForLog('Server ready');
+
+const exposed = await sandbox.exposePort(3000, 'api');
+
+// Test the API
+const response = await fetch(`${exposed.url}/api/hello`);
+const data = await response.json();
+
+console.log(data);  // { message: 'Hello from sandbox!' }
+```
+
+### WebSocket server
+
+```typescript
+// Start WebSocket server
+await sandbox.writeFile('/workspace/ws-server.js', `
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ port: 8080 });
+
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    ws.send(\`Echo: \${message}\`);
+  });
+});
+
+console.log('WebSocket server listening on port 8080');
+`);
+
+const server = await sandbox.startProcess('node ws-server.js');
+await server.waitForLog('WebSocket server listening');
+
+const exposed = await sandbox.exposePort(8080, 'websocket');
+
+// Connect via WebSocket (convert https:// to wss://)
+const wsUrl = exposed.url.replace('https://', 'wss://');
+const ws = new WebSocket(wsUrl);
+```
+
+### Static file server
+
+```typescript
+// Clone a static site
+await sandbox.checkout('https://github.com/user/static-site');
+
+// Serve with Python
+const server = await sandbox.startProcess(
+  'python3 -m http.server 8000',
+  { cwd: '/workspace/static-site' }
+);
+
+await server.waitForPort(8000);
+
+const exposed = await sandbox.exposePort(8000, 'static-site');
+
+return Response.json({
+  message: 'Site deployed',
+  url: exposed.url
+});
+```
+
+### Multiple services
+
+```typescript
+// Start frontend and backend
+const frontend = await sandbox.startProcess(
+  'npm run dev',
+  { cwd: '/workspace/frontend' }
+);
+
+const backend = await sandbox.startProcess(
+  'npm start',
+  { cwd: '/workspace/backend' }
+);
+
+// Wait for both to be ready
+await Promise.all([
+  frontend.waitForPort(5173),
+  backend.waitForPort(3000)
+]);
+
+// Expose both
+const [frontendUrl, backendUrl] = await Promise.all([
+  sandbox.exposePort(5173, 'frontend'),
+  sandbox.exposePort(3000, 'backend')
+]);
+
+return Response.json({
+  frontend: frontendUrl.url,
+  backend: backendUrl.url
+});
+```
+
+## Direct WebSocket connections
+
+For WebSocket connections that bypass preview URLs, use `wsConnect()`:
+
+```typescript
+// Handle WebSocket upgrade in your Worker
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const upgrade = request.headers.get('Upgrade');
+    
+    if (upgrade === 'websocket') {
+      const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+      
+      // Connect directly to sandbox port
+      return await sandbox.wsConnect(request, 8080);
+    }
+    
+    // Regular HTTP request
+    // ...
+  }
+}
+```
+
+<Note>
+`wsConnect()` provides a direct WebSocket connection to a sandbox port without using preview URLs. Perfect for WebSocket applications that need custom routing.
+</Note>
+
+## Security considerations
+
+Preview URLs are protected with secure tokens, but consider:
+
+### Limit exposure duration
+
+```typescript
+// Expose port for limited time
+const exposed = await sandbox.exposePort(8000);
+
+// Close after 1 hour
+setTimeout(async () => {
+  await sandbox.closePort(8000);
+}, 3600000);
+```
+
+### Validate requests
+
+Add authentication in your sandbox service:
+
+```typescript
+await sandbox.writeFile('/workspace/server.js', `
+const express = require('express');
+const app = express();
+
+app.use((req, res, next) => {
+  const token = req.headers['authorization'];
+  
+  if (token !== 'Bearer secret-token') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  next();
+});
+
+// Your routes...
+`);
+```
+
+### Use HTTPS only
+
+All preview URLs use HTTPS automatically, ensuring encrypted communication.
+
+## Troubleshooting
+
+### Port not ready
+
+```typescript
+try {
+  await server.waitForPort(8000, { timeout: 30000 });
+} catch (error) {
+  // Check server logs
+  const logs = await server.getLogs();
+  console.error('Server logs:', logs.stderr);
+  
+  // Check if process is still running
+  const status = await server.getStatus();
+  console.log('Process status:', status);
+}
+```
+
+### Connection refused
+
+Ensure the server binds to `0.0.0.0`, not `localhost`:
+
+```typescript
+// Bad - only accessible from within container
+app.listen(3000, 'localhost');
+
+// Good - accessible from outside
+app.listen(3000, '0.0.0.0');
+```
+
+### Port already exposed
+
+```typescript
+try {
+  await sandbox.exposePort(8000);
+} catch (error) {
+  if (error.message.includes('already exposed')) {
+    // Port already exposed, get the URL
+    const ports = await sandbox.getExposedPorts();
+    const existing = ports.ports.find(p => p.port === 8000);
+    console.log('Already exposed at:', existing?.url);
+  }
+}
+```
+
+## Best practices
+
+<Steps>
+
+### Always wait for readiness
+
+Never expose ports before the service is ready to accept connections. Use `waitForPort()` or `waitForLog()` to ensure readiness.
+
+### Use descriptive names
+
+Name your exposed ports for easier management:
+
+```typescript
+await sandbox.exposePort(3000, 'api-server');
+await sandbox.exposePort(5173, 'vite-dev');
+await sandbox.exposePort(8080, 'websocket');
+```
+
+### Clean up when done
+
+Close exposed ports when services are no longer needed:
+
+```typescript
+try {
+  const exposed = await sandbox.exposePort(8000);
+  // Use the service...
+} finally {
+  await sandbox.closePort(8000);
+}
+```
+
+### Monitor service health
+
+Periodically check that exposed services are still healthy:
+
+```typescript
+const exposed = await sandbox.exposePort(3000);
+
+setInterval(async () => {
+  try {
+    const response = await fetch(`${exposed.url}/health`);
+    if (!response.ok) {
+      console.error('Service unhealthy:', response.status);
+    }
+  } catch (error) {
+    console.error('Health check failed:', error);
+  }
+}, 30000);
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Start and manage background processes
+</Card>
+
+<Card title="Executing commands" icon="terminal" href="/guides/executing-commands">
+  Run commands in your sandbox
+</Card>
+
+<Card title="Streaming output" icon="stream" href="/guides/streaming-output">
+  Stream real-time updates from processes
+</Card>
+
+<Card title="Deploy guide" icon="rocket" href="https://developers.cloudflare.com/sandbox/deploy/">
+  Configure custom domains for preview URLs
+</Card>
+
+</CardGroup>

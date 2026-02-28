@@ -1,0 +1,121 @@
+---
+title: 'waitForExit'
+description: 'Wait for a process to exit'
+---
+
+Waits for a background process to exit and returns its exit code. This is useful for waiting on batch jobs or short-lived processes.
+
+## Method Signature
+
+```typescript
+await process.waitForExit(
+  timeout?: number
+): Promise<WaitForExitResult>
+```
+
+<Note>
+This is a method on the `Process` object returned by `startProcess()`, not on the sandbox itself.
+</Note>
+
+## Parameters
+
+<ParamField path="timeout" type="number">
+  Maximum time to wait in milliseconds. If not specified, waits indefinitely.
+</ParamField>
+
+## Returns
+
+<ResponseField name="WaitForExitResult" type="object">
+  <Expandable title="WaitForExitResult">
+    <ResponseField name="exitCode" type="number">
+      Process exit code. Typically 0 for success, non-zero for failure.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Wait for process completion
+
+```typescript
+const process = await sandbox.startProcess('python train.py');
+
+const { exitCode } = await process.waitForExit();
+
+if (exitCode === 0) {
+  console.log('Training completed successfully');
+} else {
+  console.log('Training failed with exit code:', exitCode);
+}
+```
+
+### Wait with timeout
+
+```typescript
+const process = await sandbox.startProcess('npm run build');
+
+try {
+  const { exitCode } = await process.waitForExit(30000); // 30 seconds
+  console.log('Build completed:', exitCode);
+} catch (error) {
+  console.error('Build timed out after 30 seconds');
+}
+```
+
+### Run and wait for batch job
+
+```typescript
+const process = await sandbox.startProcess(
+  'python process_data.py',
+  { processId: 'data-processor' }
+);
+
+console.log('Processing data...');
+const { exitCode } = await process.waitForExit();
+
+if (exitCode === 0) {
+  const logs = await process.getLogs();
+  console.log('Processing complete:', logs.stdout);
+}
+```
+
+### Handle multiple processes
+
+```typescript
+const processes = await Promise.all([
+  sandbox.startProcess('task1.sh'),
+  sandbox.startProcess('task2.sh'),
+  sandbox.startProcess('task3.sh')
+]);
+
+const results = await Promise.all(
+  processes.map(p => p.waitForExit())
+);
+
+const allSucceeded = results.every(r => r.exitCode === 0);
+console.log('All tasks succeeded:', allSucceeded);
+```
+
+## Error Handling
+
+Throws `ProcessReadyTimeoutError` if the timeout is reached before the process exits.
+
+```typescript
+import { ProcessReadyTimeoutError } from '@cloudflare/sandbox';
+
+try {
+  await process.waitForExit(5000);
+} catch (error) {
+  if (error instanceof ProcessReadyTimeoutError) {
+    console.log('Process did not exit within timeout');
+    await process.kill(); // Clean up
+  }
+}
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a background process
+- [waitForLog](/api/wait-for-log) - Wait for log output
+- [waitForPort](/api/wait-for-port) - Wait for port readiness
+- [killProcess](/api/kill-process) - Kill a running process

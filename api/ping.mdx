@@ -1,0 +1,143 @@
+---
+title: 'ping'
+description: 'Check if the sandbox is responsive and healthy'
+---
+
+Sends a ping request to the sandbox to verify it's running and responsive. Useful for health checks and monitoring.
+
+## Method Signature
+
+```typescript
+async ping(): Promise<string>
+```
+
+## Parameters
+
+This method takes no parameters.
+
+## Returns
+
+<ResponseField name="string" type="string">
+  A message confirming the sandbox is responsive (typically "pong")
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Check if sandbox is responsive
+try {
+  const response = await sandbox.ping();
+  console.log('Sandbox is healthy:', response); // "pong"
+} catch (error) {
+  console.error('Sandbox is not responding:', error);
+}
+```
+
+## Example: Health Check Endpoint
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+    
+    if (url.pathname === '/health') {
+      const sandbox = getSandbox(env.SANDBOX, 'main');
+      
+      try {
+        await sandbox.ping();
+        return new Response('OK', { status: 200 });
+      } catch (error) {
+        return new Response('Service Unavailable', { status: 503 });
+      }
+    }
+    
+    // ... rest of your app
+  }
+};
+```
+
+## Example: Wait for Sandbox Ready
+
+```typescript
+async function waitForSandbox(sandbox: Sandbox, maxAttempts = 10) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await sandbox.ping();
+      return true;
+    } catch (error) {
+      if (i === maxAttempts - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  return false;
+}
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+await waitForSandbox(sandbox);
+console.log('Sandbox is ready');
+```
+
+## Example: Monitoring
+
+```typescript
+// Periodic health check
+setInterval(async () => {
+  const sandbox = getSandbox(env.SANDBOX, 'production');
+  
+  try {
+    const start = Date.now();
+    await sandbox.ping();
+    const latency = Date.now() - start;
+    
+    console.log(`Sandbox health check: OK (${latency}ms)`);
+    
+    // Report to monitoring system
+    await fetch('https://monitoring.example.com/metrics', {
+      method: 'POST',
+      body: JSON.stringify({
+        service: 'sandbox',
+        status: 'healthy',
+        latency
+      })
+    });
+  } catch (error) {
+    console.error('Sandbox health check: FAILED', error);
+    // Alert on-call engineer
+  }
+}, 60000); // Every minute
+```
+
+## Error Handling
+
+Throws an error if:
+- Sandbox container is not running
+- Container is unresponsive or overloaded
+- Network communication fails
+- Container is starting up
+
+```typescript
+try {
+  await sandbox.ping();
+} catch (error) {
+  // Sandbox is unhealthy
+  console.error('Ping failed:', error.message);
+}
+```
+
+## Notes
+
+- Very lightweight operation - minimal overhead
+- Automatically starts the container if it's sleeping
+- Does not affect sandbox state or running processes
+- Useful for readiness checks before executing commands
+- Container startup may take several seconds on first ping
+- Fast response indicates healthy container
+
+## See Also
+
+- [exec](/api/exec) - Execute commands
+- [Sandbox instance](/api/sandbox) - Sandbox lifecycle

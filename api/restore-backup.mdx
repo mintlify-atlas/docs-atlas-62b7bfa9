@@ -1,0 +1,172 @@
+---
+title: 'restoreBackup'
+description: 'Restore a directory from a previously created backup'
+---
+
+Restores a directory from a backup stored in Cloudflare R2, recreating the original files and directory structure.
+
+## Method Signature
+
+```typescript
+async restoreBackup(
+  backup: DirectoryBackup
+): Promise<RestoreBackupResult>
+```
+
+## Parameters
+
+<ParamField path="backup" type="DirectoryBackup" required>
+  The backup handle to restore
+  
+  <Expandable title="properties">
+    <ParamField path="id" type="string" required>
+      Unique backup identifier
+    </ParamField>
+    
+    <ParamField path="dir" type="string" required>
+      Directory that was backed up (becomes the restore target)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="RestoreBackupResult" type="object">
+  Result of the restore operation
+  
+  <Expandable title="properties">
+    <ResponseField name="success" type="boolean" required>
+      Whether the restore succeeded
+    </ResponseField>
+    
+    <ResponseField name="dir" type="string" required>
+      The directory that was restored
+    </ResponseField>
+    
+    <ResponseField name="id" type="string" required>
+      Backup ID that was restored
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Retrieve backup handle from storage
+const backupJson = await env.KV.get('backup:latest');
+const backup = JSON.parse(backupJson);
+
+// Restore the backup
+const result = await sandbox.restoreBackup(backup);
+console.log('Restored directory:', result.dir);
+
+// Files are now available
+const content = await sandbox.readFile(`${result.dir}/output.txt`);
+console.log(content);
+```
+
+## Example: Disaster Recovery
+
+```typescript
+try {
+  // Try a dangerous operation
+  await sandbox.exec('rm -rf /workspace/data/*');
+  await sandbox.exec('risky-script.sh');
+} catch (error) {
+  console.error('Operation failed, restoring backup...');
+  
+  // Retrieve and restore last known good state
+  const backupJson = await env.KV.get('backup:last-good');
+  const backup = JSON.parse(backupJson);
+  
+  await sandbox.restoreBackup(backup);
+  console.log('Restored to last known good state');
+}
+```
+
+## Example: Cross-Sandbox Restore
+
+```typescript
+// Create backup in one sandbox
+const sandbox1 = getSandbox(env.SANDBOX, 'sandbox-1');
+const backup = await sandbox1.createBackup({
+  dir: '/workspace/data'
+});
+
+// Store backup handle
+await env.KV.put('shared-backup', JSON.stringify(backup));
+
+// Restore in a different sandbox
+const sandbox2 = getSandbox(env.SANDBOX, 'sandbox-2');
+const backupJson = await env.KV.get('shared-backup');
+const backupHandle = JSON.parse(backupJson);
+
+await sandbox2.restoreBackup(backupHandle);
+console.log('Data copied from sandbox-1 to sandbox-2');
+```
+
+## Example: Restore to Different Path
+
+```typescript
+// Create backup from /workspace/data
+const backup = await sandbox.createBackup({
+  dir: '/workspace/data'
+});
+
+// Restore to different location by modifying the handle
+const modifiedBackup = {
+  id: backup.id,
+  dir: '/workspace/restored-data' // Different target
+};
+
+await sandbox.restoreBackup(modifiedBackup);
+```
+
+## Error Handling
+
+Throws an error if:
+- Backup ID is invalid or expired
+- Target directory already exists
+- R2 download fails
+- Insufficient disk space
+- R2 is not configured
+- Backup file is corrupted
+
+```typescript
+try {
+  await sandbox.restoreBackup(backup);
+} catch (error) {
+  if (error.code === 'BACKUP_NOT_FOUND') {
+    console.error('Backup expired or deleted');
+  } else if (error.code === 'BACKUP_RESTORE_ERROR') {
+    console.error('Failed to restore:', error.message);
+  }
+}
+```
+
+## Technical Details
+
+- Downloads backup from R2 using presigned URLs
+- Decompresses SquashFS archive in the container
+- Extracts files to the target directory
+- Restore process is serialized to prevent concurrent operations
+- Large backups may take time to download and extract
+
+## Notes
+
+- Target directory must not exist (or must be empty)
+- File permissions and ownership are preserved
+- Symlinks are restored with their original targets
+- Restore operations are atomic - either all files are restored or none
+- Can restore to a different sandbox than where the backup was created
+- Backup handles are serializable - store them anywhere (KV, DO, database)
+- Modifying the `dir` field in the handle changes the restore target
+
+## See Also
+
+- [createBackup](/api/create-backup) - Create a backup
+- [Backups Guide](/guides/backups-and-restore) - Learn about backup strategies

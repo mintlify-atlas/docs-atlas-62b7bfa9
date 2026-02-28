@@ -1,0 +1,160 @@
+---
+title: Introduction
+description: Build secure, isolated code execution environments on Cloudflare
+---
+
+**Build secure, isolated code execution environments on Cloudflare.**
+
+The Cloudflare Sandbox SDK lets you run untrusted code safely in isolated containers. Execute commands, manage files, run background processes, and expose services — all from your Workers applications.
+
+Perfect for AI code execution, interactive development environments, data analysis platforms, CI/CD systems, and any application that needs secure code execution at the edge.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Secure isolation" icon="shield-check">
+    Each sandbox runs in its own container with complete isolation from other workloads
+  </Card>
+  <Card title="Edge-native" icon="globe">
+    Runs on Cloudflare's global network for low-latency code execution worldwide
+  </Card>
+  <Card title="Code interpreter" icon="code">
+    Execute Python and JavaScript with rich outputs including matplotlib charts
+  </Card>
+  <Card title="File system access" icon="folder">
+    Read, write, and manage files with full POSIX filesystem support
+  </Card>
+  <Card title="Command execution" icon="terminal">
+    Run any command with streaming support for real-time output
+  </Card>
+  <Card title="Preview URLs" icon="link">
+    Expose services running in your sandbox with public URLs
+  </Card>
+  <Card title="Git integration" icon="git-branch">
+    Clone repositories directly into your sandbox environment
+  </Card>
+  <Card title="Background processes" icon="play">
+    Run long-running processes and manage their lifecycle
+  </Card>
+</CardGroup>
+
+## Use cases
+
+### AI code execution
+
+Give AI models the ability to write and execute code safely. Perfect for:
+- AI agents that need to run Python for data analysis
+- Code generation tools that validate outputs
+- Interactive coding assistants
+
+### Development environments
+
+Build cloud-based IDEs and development tools:
+- Browser-based code editors
+- Interactive tutorials and learning platforms
+- Code playgrounds and REPLs
+
+### Data analysis platforms
+
+Run user-submitted data processing code:
+- Jupyter-style notebook environments
+- Custom data transformation pipelines
+- Statistical analysis tools
+
+### CI/CD systems
+
+Execute build and test workflows:
+- Automated testing environments
+- Build systems for user projects
+- Deployment automation
+
+## How it works
+
+The Sandbox SDK is built on Cloudflare's container platform and uses Durable Objects to manage sandbox lifecycle:
+
+<Steps>
+  <Step title="Create a sandbox">
+    Your Worker gets a reference to a sandbox using `getSandbox()`. Each sandbox is backed by a Durable Object that manages the container lifecycle.
+  </Step>
+  <Step title="Execute code">
+    Call methods like `exec()`, `writeFile()`, or `runCode()` to interact with the sandbox. The SDK communicates with the container runtime over HTTP.
+  </Step>
+  <Step title="Get results">
+    Receive execution results, file contents, or streamed output back in your Worker.
+  </Step>
+  <Step title="Automatic lifecycle">
+    Containers hibernate when idle and wake up on demand. State persists across requests.
+  </Step>
+</Steps>
+
+## Architecture
+
+```
+Worker → Sandbox Durable Object → Container Runtime → Shell/Filesystem
+```
+
+- **Worker**: Your application code that calls the SDK
+- **Sandbox Durable Object**: Manages container lifecycle and routes requests
+- **Container Runtime**: Bun-based HTTP server running inside Docker containers
+- **Shell/Filesystem**: Ubuntu 22.04 with Python 3.11, Node.js 20, Git, and common utilities
+
+## What's included
+
+Each sandbox container comes pre-installed with:
+
+- **Python 3.11** with matplotlib, numpy, pandas, and ipython
+- **Node.js 20 LTS** with npm
+- **Bun 1.x** runtime
+- **Git** for repository operations
+- **Common utilities**: curl, wget, jq, and more
+
+You can also use custom Docker images to add your own tools and dependencies.
+
+## Quick example
+
+```typescript
+import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+
+export { Sandbox } from '@cloudflare/sandbox';
+
+type Env = {
+  Sandbox: DurableObjectNamespace<Sandbox>;
+};
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+    
+    // Execute Python code
+    const result = await sandbox.exec('python3 -c "print(2 + 2)"');
+    
+    return Response.json({ 
+      output: result.stdout,
+      success: result.success 
+    });
+  }
+};
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install the SDK and set up your first project
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first sandbox application in 5 minutes
+  </Card>
+  <Card title="API reference" icon="book" href="/api-reference">
+    Explore the complete SDK API
+  </Card>
+  <Card title="Examples" icon="code" href="/examples">
+    See real-world applications and use cases
+  </Card>
+</CardGroup>
+
+## Status
+
+<Note>
+  The Sandbox SDK is in **open beta**. The API is stable and safe for production use, but may evolve based on feedback before v1.0.
+</Note>

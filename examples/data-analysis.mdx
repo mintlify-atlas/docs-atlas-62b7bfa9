@@ -1,0 +1,324 @@
+---
+title: Data analysis with Python
+description: Build data analysis platforms with Python, pandas, and visualization libraries
+---
+
+Create data analysis platforms that execute Python code with popular libraries like pandas, numpy, and matplotlib in isolated sandboxes. This example shows how to build interactive data analysis tools using the Code Interpreter API.
+
+## Overview
+
+The Sandbox SDK includes Python with pre-installed data science libraries:
+
+- **pandas**: Data manipulation and analysis
+- **numpy**: Numerical computing
+- **matplotlib**: Data visualization
+- **ipython**: Enhanced interactive Python shell
+
+## How it works
+
+The Code Interpreter API provides a high-level interface for executing Python code with rich output support:
+
+- **Code execution**: Run Python code in isolated contexts
+- **Output capture**: Capture stdout, stderr, and expression results
+- **Rich outputs**: Support for text, HTML, and image outputs
+- **Error handling**: Proper exception handling and error reporting
+
+## Implementation
+
+### Set up the code context
+
+Create a Python execution context:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.Sandbox, 'data-analysis');
+
+// Create a Python context for code execution
+const pythonContext = await sandbox.createCodeContext({
+  language: 'python'
+});
+```
+
+### Execute data analysis code
+
+Run Python code and capture results:
+
+```typescript
+const code = `
+import pandas as pd
+import numpy as np
+
+# Create sample data
+data = {
+    'name': ['Alice', 'Bob', 'Charlie', 'David'],
+    'age': [25, 30, 35, 40],
+    'salary': [50000, 60000, 75000, 80000]
+}
+
+df = pd.DataFrame(data)
+
+# Calculate statistics
+mean_age = df['age'].mean()
+mean_salary = df['salary'].mean()
+
+print(f"Average age: {mean_age}")
+print(f"Average salary: ${mean_salary:,.2f}")
+
+# Show the dataframe
+df
+`;
+
+const result = await sandbox.runCode(code, {
+  context: pythonContext
+});
+
+// Extract outputs
+if (result.results?.length) {
+  const outputs = result.results.map((r) => {
+    if (r.html) return { type: 'html', content: r.html };
+    if (r.text) return { type: 'text', content: r.text };
+    return { type: 'json', content: JSON.stringify(r) };
+  });
+}
+
+// Extract logs
+const stdout = result.logs?.stdout?.join('\n') || '';
+const stderr = result.logs?.stderr?.join('\n') || '';
+```
+
+### Create visualizations
+
+Generate plots with matplotlib:
+
+```typescript
+const plotCode = `
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Generate data
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+# Create plot
+plt.figure(figsize=(10, 6))
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.xlabel('X axis')
+plt.ylabel('Y axis')
+plt.grid(True)
+plt.show()
+`;
+
+const plotResult = await sandbox.runCode(plotCode, {
+  context: pythonContext
+});
+
+// The plot will be available in the results as an image
+if (plotResult.results?.length) {
+  const imageOutput = plotResult.results.find(
+    (r) => r.type === 'image' || r.html?.includes('<img')
+  );
+}
+```
+
+### Process uploaded files
+
+Analyze CSV files uploaded by users:
+
+```typescript
+// Upload a CSV file to the sandbox
+await sandbox.writeFile('/workspace/data.csv', csvContent);
+
+const analysisCode = `
+import pandas as pd
+
+# Read the CSV file
+df = pd.read_csv('/workspace/data.csv')
+
+# Display basic info
+print("Dataset shape:", df.shape)
+print("\nColumn types:")
+print(df.dtypes)
+print("\nFirst few rows:")
+print(df.head())
+
+# Statistical summary
+print("\nStatistical summary:")
+print(df.describe())
+
+# Check for missing values
+print("\nMissing values:")
+print(df.isnull().sum())
+`;
+
+const analysisResult = await sandbox.runCode(analysisCode, {
+  context: pythonContext
+});
+```
+
+### Build a complete endpoint
+
+Create an API for data analysis:
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/analyze' && request.method === 'POST') {
+      const { code, data } = await request.json<{
+        code?: string;
+        data?: string;
+      }>();
+
+      if (!code) {
+        return Response.json({ error: 'Missing code field' }, { status: 400 });
+      }
+
+      const sandbox = getSandbox(env.Sandbox, 'data-analysis');
+      const pythonContext = await sandbox.createCodeContext({
+        language: 'python'
+      });
+
+      // If data is provided, write it to a file first
+      if (data) {
+        await sandbox.writeFile('/workspace/data.csv', data);
+      }
+
+      const result = await sandbox.runCode(code, {
+        context: pythonContext
+      });
+
+      // Format response
+      const response = {
+        success: !result.error,
+        outputs: result.results?.map((r) => ({
+          type: r.html ? 'html' : 'text',
+          content: r.html || r.text || JSON.stringify(r)
+        })) || [],
+        stdout: result.logs?.stdout?.join('\n') || '',
+        stderr: result.logs?.stderr?.join('\n') || '',
+        error: result.error
+      };
+
+      return Response.json(response);
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+};
+```
+
+## Example usage
+
+### Basic data analysis
+
+```bash
+curl -X POST http://localhost:8787/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "import pandas as pd\nimport numpy as np\n\ndata = {\"x\": [1,2,3,4,5], \"y\": [2,4,6,8,10]}\ndf = pd.DataFrame(data)\nprint(df.describe())"
+  }'
+```
+
+### Analyze CSV data
+
+```bash
+curl -X POST http://localhost:8787/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": "name,age,salary\nAlice,25,50000\nBob,30,60000\nCharlie,35,75000",
+    "code": "import pandas as pd\ndf = pd.read_csv("/workspace/data.csv")\nprint(df.groupby(\"age\").mean())"
+  }'
+```
+
+### Create visualization
+
+```bash
+curl -X POST http://localhost:8787/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "import matplotlib.pyplot as plt\nimport numpy as np\nx = np.linspace(0, 10, 100)\ny = np.sin(x)\nplt.plot(x, y)\nplt.title(\"Sine Wave\")\nplt.show()"
+  }'
+```
+
+## Response format
+
+The API returns structured outputs:
+
+```json
+{
+  "success": true,
+  "outputs": [
+    {
+      "type": "html",
+      "content": "<div class='dataframe'>...</div>"
+    },
+    {
+      "type": "text",
+      "content": "42"
+    }
+  ],
+  "stdout": "Average age: 30\nAverage salary: $65,000.00\n",
+  "stderr": "",
+  "error": null
+}
+```
+
+## Pre-installed libraries
+
+The sandbox includes these Python libraries:
+
+- **pandas**: Data manipulation and analysis
+- **numpy**: Numerical computing and arrays
+- **matplotlib**: Plotting and visualization
+- **ipython**: Enhanced Python shell
+
+For other libraries, install them at runtime:
+
+```python
+import subprocess
+import sys
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", "scikit-learn"])
+
+# Now you can use the library
+from sklearn.linear_model import LinearRegression
+```
+
+## Use cases
+
+- **Data Analysis Platforms**: Build interactive notebooks for data exploration
+- **Report Generation**: Automated data analysis and report creation
+- **Business Intelligence**: Custom analytics endpoints for dashboards
+- **Educational Tools**: Interactive Python learning environments
+- **Data Processing Pipelines**: ETL workflows with Python
+
+## Tips
+
+<Tip>
+  Use code contexts to maintain state across multiple code executions. Variables and imports persist within the same context.
+</Tip>
+
+<Tip>
+  For large datasets, write data to files first rather than embedding in code strings. This is more efficient and easier to debug.
+</Tip>
+
+<Tip>
+  Matplotlib plots are automatically captured as HTML output. You don't need to save them to files.
+</Tip>
+
+## Best practices
+
+- **Timeout handling**: Set appropriate timeouts for long-running analysis
+- **Memory limits**: Be aware of container memory limits for large datasets
+- **Error handling**: Always check for errors in the result object
+- **Output formatting**: Parse different output types (text, HTML, images) appropriately
+- **State management**: Use separate contexts for different users or analysis sessions
+
+## Related resources
+
+- [Code Interpreter API reference](/api/code-interpreter/run-code)
+- [File operations guide](/guides/managing-files)
+- [Python execution guide](/guides/code-interpreter)

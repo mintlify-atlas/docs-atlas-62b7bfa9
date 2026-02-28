@@ -1,0 +1,179 @@
+---
+title: Sandbox instances
+description: Understanding how sandbox instances work and their lifecycle
+---
+
+## What is a sandbox instance?
+
+A sandbox instance is an isolated container environment running on Cloudflare's edge. Each sandbox is backed by a Durable Object that manages the container lifecycle, providing persistent identity and state management.
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request, env) {
+    // Get or create a sandbox instance with a unique ID
+    const sandbox = getSandbox(env.SANDBOX, 'my-project');
+    
+    // Execute commands in the isolated container
+    const result = await sandbox.exec('python script.py');
+    
+    return Response.json(result);
+  }
+};
+```
+
+## Sandbox lifecycle
+
+Sandboxes progress through several states during their lifetime:
+
+<Steps>
+  <Step title="Starting">
+    The container VM is being provisioned and the application is starting up. This can take several minutes on first deployment.
+  </Step>
+  
+  <Step title="Running">
+    The container is active and ready to execute commands. All file system changes and running processes exist in memory.
+  </Step>
+  
+  <Step title="Sleeping">
+    After a period of inactivity (default 10 minutes), the container sleeps. The file system and all running processes are lost.
+  </Step>
+  
+  <Step title="Destroyed">
+    The sandbox is explicitly destroyed via `sandbox.destroy()`. All resources are cleaned up.
+  </Step>
+</Steps>
+
+<Warning>
+State is ephemeral - files and processes only exist while the container is active. Use `createBackup()` and `restoreBackup()` for persistent state across sleep cycles.
+</Warning>
+
+## Configuration options
+
+Configure sandbox behavior when creating an instance:
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'my-project', {
+  // Sleep after 30 minutes of inactivity
+  sleepAfter: '30m',
+  
+  // Keep container alive indefinitely (must call destroy() when done)
+  keepAlive: true,
+  
+  // Normalize ID to lowercase for preview URL compatibility
+  normalizeId: true,
+  
+  // Custom startup timeouts for heavy containers
+  containerTimeouts: {
+    instanceGetTimeoutMS: 30000,   // 30s to provision VM
+    portReadyTimeoutMS: 180000     // 3min for app startup
+  }
+});
+```
+
+### Sleep timeout
+
+Control when the container sleeps due to inactivity:
+
+<ParamField path="sleepAfter" type="string | number" default="'10m'">
+  Duration after which the sandbox sleeps if no requests are received. Can be:
+  - String: `"30s"`, `"3m"`, `"5m"`, `"1h"` (seconds, minutes, hours)
+  - Number: seconds (e.g., `180` for 3 minutes)
+</ParamField>
+
+<Note>
+The `sleepAfter` option is ignored when `keepAlive` is enabled.
+</Note>
+
+### Keep alive mode
+
+<ParamField path="keepAlive" type="boolean" default="false">
+  Prevent automatic shutdown. The container stays alive indefinitely until you explicitly call `sandbox.destroy()`.
+</ParamField>
+
+<Warning>
+When using `keepAlive: true`, you MUST call `sandbox.destroy()` when finished to avoid resource leaks.
+</Warning>
+
+### Container timeouts
+
+Configure startup behavior for heavy containers or fail-fast applications:
+
+```typescript
+containerTimeouts: {
+  // Time to wait for VM provisioning (5s - 5min range)
+  instanceGetTimeoutMS: 30000,
+  
+  // Time to wait for app startup and ports (10s - 10min range)
+  portReadyTimeoutMS: 90000,
+  
+  // Polling interval for readiness checks (100ms - 5s range)
+  waitIntervalMS: 1000
+}
+```
+
+These can also be configured via environment variables:
+- `SANDBOX_INSTANCE_TIMEOUT_MS`
+- `SANDBOX_PORT_TIMEOUT_MS`
+- `SANDBOX_POLL_INTERVAL_MS`
+
+**Precedence**: options > env vars > SDK defaults
+
+## Sandbox identity
+
+Each sandbox is identified by a string ID that maps to a Durable Object:
+
+```typescript
+// Same ID = same Durable Object = same container instance
+const sandbox1 = getSandbox(env.SANDBOX, 'user-123');
+const sandbox2 = getSandbox(env.SANDBOX, 'user-123');
+// sandbox1 and sandbox2 point to the same container
+
+// Different ID = different container
+const sandbox3 = getSandbox(env.SANDBOX, 'user-456');
+// sandbox3 is a completely separate container
+```
+
+<Warning>
+**ID normalization**: Different `normalizeId` values create different Durable Objects:
+- `getSandbox(ns, "MyProject")` → DO key: `"MyProject"`
+- `getSandbox(ns, "MyProject", {normalizeId: true})` → DO key: `"myproject"`
+
+Always use lowercase IDs or consistently apply `normalizeId: true`.
+</Warning>
+
+## Base URL configuration
+
+Specify a base URL for the sandbox API (rarely needed):
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'my-project', {
+  baseUrl: 'https://custom.example.com'
+});
+```
+
+This is typically only needed for custom routing scenarios.
+
+## Container architecture
+
+Each sandbox runs in an isolated VM with:
+
+- **Ubuntu 22.04** base image
+- **Python 3.11** with common data science libraries (matplotlib, numpy, pandas)
+- **Node.js 20 LTS** for JavaScript/TypeScript execution
+- **Bun runtime** powering the container HTTP server
+- **Common utilities**: git, curl, wget, jq, and more
+
+The container exposes an HTTP API on port 3000 for control operations. User applications can run on any port 1024-65535.
+
+## Platform context
+
+Sandboxes leverage Cloudflare's infrastructure:
+
+- **VM-based isolation**: Each sandbox runs in its own secure VM
+- **Edge distribution**: Sandboxes run geographically close to users
+- **Durable Objects**: Provide container lifecycle management and persistent identity
+- **Auto-scaling**: Containers provision on-demand and sleep when inactive
+
+For platform limits and instance types, see the [Cloudflare Containers documentation](https://developers.cloudflare.com/sandbox/).

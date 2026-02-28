@@ -1,0 +1,616 @@
+---
+title: Security considerations
+description: Security best practices, isolation boundaries, and threat mitigation for Cloudflare Sandbox SDK
+---
+
+## Overview
+
+Cloudflare Sandbox provides isolated execution environments, but proper security requires understanding isolation boundaries, implementing access controls, and following secure coding practices.
+
+## Isolation model
+
+### Container-level isolation
+
+Each sandbox runs in a separate container with:
+
+- **Process isolation** - Separate process namespace
+- **Filesystem isolation** - Isolated root filesystem
+- **Network isolation** - Separate network stack
+- **Resource limits** - CPU, memory, and disk quotas
+
+**Isolation is provided by Cloudflare's platform**, not by the SDK. Containers run in VMs with hardware-level isolation.
+
+### What's shared between sandboxes
+
+**Nothing is shared by default.** Each sandbox is completely isolated:
+
+```typescript
+const sandbox1 = getSandbox(env.SANDBOX, 'user-1');
+const sandbox2 = getSandbox(env.SANDBOX, 'user-2');
+
+// These are completely isolated - no shared state
+await sandbox1.exec('echo "secret" > /tmp/data.txt');
+await sandbox2.exec('cat /tmp/data.txt'); // File not found
+```
+
+### Session isolation
+
+Sessions within the same sandbox share the filesystem but have separate:
+
+- Working directories (can differ)
+- Environment variables (per session)
+- Shell state (independent shells)
+
+```typescript
+const session1 = await sandbox.createSession({ 
+  id: 'session-1',
+  cwd: '/workspace/project-a'
+});
+
+const session2 = await sandbox.createSession({ 
+  id: 'session-2',
+  cwd: '/workspace/project-b'
+});
+
+// Filesystem is shared
+await session1.exec('echo "data" > /shared/file.txt');
+await session2.exec('cat /shared/file.txt'); // "data"
+
+// Environment variables are isolated
+await session1.exec('export API_KEY=secret1');
+const result = await session2.exec('echo $API_KEY');
+console.log(result.stdout); // Empty - not inherited
+```
+
+## Access control
+
+### Sandbox ID security
+
+Sandbox IDs act as access tokens. Keep them unpredictable:
+
+```typescript
+// Bad: Predictable IDs enable unauthorized access
+const sandbox = getSandbox(env.SANDBOX, 'user-123');
+
+// Good: Cryptographically random IDs
+import { randomUUID } from 'crypto';
+const sandboxId = `${userId}-${randomUUID()}`;
+const sandbox = getSandbox(env.SANDBOX, sandboxId);
+```
+
+**Store sandbox IDs securely:**
+
+```typescript
+// Store in Durable Object storage
+await this.ctx.storage.put(`user:${userId}:sandbox`, sandboxId);
+
+// Or in KV with encryption
+const encrypted = await encrypt(sandboxId, env.ENCRYPTION_KEY);
+await env.KV.put(`sandbox:${userId}`, encrypted);
+```
+
+### Validate user access
+
+```typescript
+interface UserSession {
+  userId: string;
+  sandboxId: string;
+}
+
+export default {
+  async fetch(request: Request, env: Env) {
+    // Verify user owns the sandbox
+    const session = await getUserSession(request);
+    const allowedSandboxId = await env.KV.get(`user:${session.userId}:sandbox`);
+    
+    const requestedSandboxId = new URL(request.url).searchParams.get('sandbox');
+    
+    if (requestedSandboxId !== allowedSandboxId) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    
+    const sandbox = getSandbox(env.SANDBOX, allowedSandboxId);
+    // Proceed with authorized access
+  }
+};
+```
+
+## Input validation
+
+### Sanitize sandbox IDs
+
+The SDK enforces DNS-compliant sandbox IDs:
+
+```typescript
+try {
+  const sandbox = getSandbox(env.SANDBOX, 'user-@#$%');
+} catch (error) {
+  // SecurityError: Invalid sandbox ID
+}
+```
+
+**Rules enforced:**
+- 1-63 characters
+- Cannot start/end with hyphens
+- Reserved names blocked (www, api, admin, etc.)
+
+### Escape shell commands
+
+**Never** pass unsanitized user input to shell commands:
+
+```typescript
+import { shellEscape } from '@repo/shared';
+
+// Bad: Command injection vulnerability
+const userInput = "test; rm -rf /";
+await sandbox.exec(`echo ${userInput}`);
+
+// Good: Proper escaping
+const escaped = shellEscape(userInput);
+await sandbox.exec(`echo ${escaped}`);
+
+// Better: Use parameterized operations
+await sandbox.files.write('/output.txt', userInput);
+```
+
+### Validate file paths
+
+```typescript
+function isValidPath(path: string): boolean {
+  // Must be absolute
+  if (!path.startsWith('/')) return false;
+  
+  // No directory traversal
+  if (path.includes('..')) return false;
+  
+  // Limit to allowed directories
+  const allowed = ['/workspace', '/tmp', '/home'];
+  if (!allowed.some(dir => path.startsWith(dir))) return false;
+  
+  return true;
+}
+
+const userPath = request.headers.get('X-File-Path');
+if (!isValidPath(userPath)) {
+  return new Response('Invalid path', { status: 400 });
+}
+
+await sandbox.files.read(userPath);
+```
+
+### Validate port numbers
+
+The SDK validates ports, but enforce application-level rules:
+
+```typescript
+const ALLOWED_PORTS = [8080, 8081, 8082];
+
+const port = Number.parseInt(request.headers.get('X-Port') || '0');
+
+if (!ALLOWED_PORTS.includes(port)) {
+  return new Response('Port not allowed', { status: 403 });
+}
+
+await sandbox.exposePort(port, `service-${port}`);
+```
+
+## Credential management
+
+### Never hardcode secrets
+
+```typescript
+// Bad: Hardcoded credentials
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: {
+    accessKeyId: 'AKIAIOSFODNN7EXAMPLE', // DON'T DO THIS!
+    secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+  }
+});
+
+// Good: Use environment bindings
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: env.R2_ENDPOINT,
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  }
+});
+```
+
+### Inject secrets securely
+
+```typescript
+// Set environment variables in sandbox
+await sandbox.exec(`export API_KEY=${shellEscape(env.API_KEY)}`);
+
+// Or write to secure file
+await sandbox.files.write('/.env', `API_KEY=${env.API_KEY}`, {
+  mode: 0o600 // Read/write for owner only
+});
+
+// Use in commands
+await sandbox.exec('source /.env && run-app');
+```
+
+### Rotate credentials
+
+```typescript
+class CredentialRotation {
+  private currentCreds: Credentials;
+  private nextRotation: number;
+  
+  async getCredentials(env: Env): Promise<Credentials> {
+    if (Date.now() > this.nextRotation) {
+      // Fetch new credentials from secrets manager
+      this.currentCreds = await env.SECRETS.get('db-credentials');
+      this.nextRotation = Date.now() + 3600000; // 1 hour
+    }
+    return this.currentCreds;
+  }
+}
+```
+
+## Network security
+
+### Restrict outbound access
+
+Containers have full internet access by default. Implement application-level controls:
+
+```typescript
+// Allowlist for outbound connections
+const ALLOWED_DOMAINS = [
+  'api.example.com',
+  'cdn.example.com'
+];
+
+async function fetchSecurely(url: string) {
+  const hostname = new URL(url).hostname;
+  
+  if (!ALLOWED_DOMAINS.includes(hostname)) {
+    throw new Error('Domain not allowed');
+  }
+  
+  return fetch(url);
+}
+```
+
+### Secure port exposure
+
+Exposed ports are publicly accessible. Use authentication:
+
+```typescript
+// Generate secure token for port access
+import { randomBytes } from 'crypto';
+
+const token = randomBytes(32).toString('hex');
+
+// Store token securely
+await env.KV.put(`port:${port}:token`, token, {
+  expirationTtl: 3600 // 1 hour
+});
+
+// Expose port
+const url = await sandbox.exposePort(8080, 'api');
+
+// Application must verify token
+// (implement in your app running on port 8080)
+```
+
+**Production requirement:**
+
+<Warning>
+  Preview URLs require a custom domain with wildcard DNS (`*.yourdomain.com`). The `.workers.dev` domain does NOT support preview URL subdomain patterns.
+</Warning>
+
+## Code execution security
+
+### Untrusted code isolation
+
+When executing user-provided code:
+
+```typescript
+// Create isolated context for user code
+const userContext = await sandbox.createContext({
+  packages: [] // Minimal dependencies
+});
+
+// Execute with timeout
+try {
+  const result = await sandbox.runCode(userCode, {
+    language: 'python',
+    contextId: userContext.id,
+    timeout: 30000 // 30 seconds
+  });
+} catch (error) {
+  // Handle timeout or execution errors
+} finally {
+  // Cleanup
+  await sandbox.deleteContext(userContext.id);
+}
+```
+
+### Resource limits
+
+```typescript
+// Limit memory usage
+await sandbox.exec('ulimit -v 1000000 && python user_script.py');
+
+// Limit CPU time
+await sandbox.exec('timeout 30s python user_script.py');
+
+// Limit file size
+await sandbox.exec('ulimit -f 10000 && python user_script.py');
+```
+
+### Prevent infinite loops
+
+```typescript
+// Use command timeout
+await sandbox.exec('potentially-infinite-loop', {
+  timeout: 60000 // Kill after 1 minute
+});
+
+// Or process timeout for background execution
+const process = await sandbox.startProcess({
+  command: 'long-running-task',
+  waitUntilReady: {
+    timeout: 30000 // Must become ready within 30s
+  }
+});
+```
+
+## Data security
+
+### Encrypt sensitive data
+
+```typescript
+import { subtle } from 'crypto';
+
+async function encryptData(data: string, key: CryptoKey) {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(data);
+  
+  const encrypted = await subtle.encrypt(
+    { name: 'AES-GCM', iv: crypto.getRandomValues(new Uint8Array(12)) },
+    key,
+    dataBuffer
+  );
+  
+  return Buffer.from(encrypted).toString('base64');
+}
+
+// Store encrypted data in sandbox
+const encrypted = await encryptData(sensitiveData, env.ENCRYPTION_KEY);
+await sandbox.files.write('/secure/data.enc', encrypted);
+```
+
+### Clean up sensitive data
+
+```typescript
+try {
+  // Write temporary credentials
+  await sandbox.files.write('/tmp/creds.json', JSON.stringify(creds));
+  
+  // Use credentials
+  await sandbox.exec('app --credentials /tmp/creds.json');
+} finally {
+  // Always cleanup
+  await sandbox.exec('shred -u /tmp/creds.json');
+}
+```
+
+### Secure file permissions
+
+```typescript
+// Write with restricted permissions
+await sandbox.exec(`cat > /secure/key.pem << 'EOF'
+${privateKey}
+EOF`);
+
+await sandbox.exec('chmod 600 /secure/key.pem');
+
+// Verify permissions
+const result = await sandbox.exec('ls -la /secure/key.pem');
+console.log('Permissions:', result.stdout); // -rw------- (owner only)
+```
+
+## Audit and monitoring
+
+### Log security events
+
+```typescript
+interface SecurityEvent {
+  timestamp: string;
+  userId: string;
+  sandboxId: string;
+  action: string;
+  success: boolean;
+  details?: any;
+}
+
+class SecurityLogger {
+  async log(event: SecurityEvent, env: Env) {
+    // Store in analytics
+    await env.ANALYTICS.writeDataPoint({
+      indexes: [event.userId, event.sandboxId],
+      blobs: [event.action],
+      doubles: [event.success ? 1 : 0]
+    });
+    
+    // Alert on suspicious activity
+    if (!event.success) {
+      await this.alert(event);
+    }
+  }
+  
+  private async alert(event: SecurityEvent) {
+    // Send to monitoring service
+  }
+}
+```
+
+### Monitor suspicious activity
+
+```typescript
+class ThreatDetector {
+  private failedAttempts = new Map<string, number>();
+  
+  async checkAccess(userId: string, sandboxId: string) {
+    const key = `${userId}:${sandboxId}`;
+    const attempts = this.failedAttempts.get(key) || 0;
+    
+    if (attempts >= 5) {
+      // Rate limit after 5 failed attempts
+      throw new Error('Too many failed attempts');
+    }
+    
+    // Verify access
+    const allowed = await this.verifyAccess(userId, sandboxId);
+    
+    if (!allowed) {
+      this.failedAttempts.set(key, attempts + 1);
+      throw new Error('Unauthorized');
+    }
+    
+    // Clear failed attempts on success
+    this.failedAttempts.delete(key);
+  }
+  
+  private async verifyAccess(userId: string, sandboxId: string): Promise<boolean> {
+    // Implement access verification
+    return true;
+  }
+}
+```
+
+### Track resource usage
+
+```typescript
+interface ResourceMetrics {
+  sandboxId: string;
+  cpuTime: number;
+  memoryUsage: number;
+  diskUsage: number;
+  networkEgress: number;
+}
+
+class ResourceMonitor {
+  async collect(sandbox: Sandbox): Promise<ResourceMetrics> {
+    const cpu = await sandbox.exec('ps aux | awk \'{sum+=$3} END {print sum}\'');
+    const memory = await sandbox.exec('free -m | awk \'/Mem/ {print $3}\'');
+    const disk = await sandbox.exec('df -h / | awk \'/\\// {print $3}\'');
+    
+    return {
+      sandboxId: 'sandbox-id',
+      cpuTime: Number.parseFloat(cpu.stdout),
+      memoryUsage: Number.parseInt(memory.stdout),
+      diskUsage: Number.parseInt(disk.stdout),
+      networkEgress: 0 // Track separately
+    };
+  }
+  
+  async checkLimits(metrics: ResourceMetrics) {
+    if (metrics.memoryUsage > 1000) { // 1GB
+      throw new Error('Memory limit exceeded');
+    }
+    
+    if (metrics.diskUsage > 10000) { // 10GB
+      throw new Error('Disk limit exceeded');
+    }
+  }
+}
+```
+
+## Common vulnerabilities
+
+### Command injection
+
+```typescript
+// Vulnerable
+const filename = req.query.file; // "test.txt; rm -rf /"
+await sandbox.exec(`cat ${filename}`);
+
+// Fixed
+import { shellEscape } from '@repo/shared';
+const escaped = shellEscape(filename);
+await sandbox.exec(`cat ${escaped}`);
+
+// Better
+await sandbox.files.read(filename);
+```
+
+### Path traversal
+
+```typescript
+// Vulnerable
+const path = req.query.path; // "../../etc/passwd"
+await sandbox.files.read(`/workspace/${path}`);
+
+// Fixed
+function sanitizePath(userPath: string): string {
+  // Remove leading slashes and resolve ..
+  const clean = userPath.replace(/^\/+/, '').replace(/\.\./g, '');
+  return `/workspace/${clean}`;
+}
+
+const safe = sanitizePath(path);
+await sandbox.files.read(safe);
+```
+
+### Credential leakage
+
+```typescript
+// Vulnerable - logged to stdout
+await sandbox.exec(`echo ${env.API_KEY}`);
+
+// Fixed - use environment variable
+await sandbox.exec('export API_KEY=${shellEscape(env.API_KEY)}');
+await sandbox.exec('my-app'); // App reads from environment
+```
+
+### Denial of service
+
+```typescript
+// Vulnerable - no timeout
+await sandbox.exec(':(){ :|:& };:'); // Fork bomb
+
+// Fixed - timeout and resource limits
+await sandbox.exec('user-command', {
+  timeout: 30000 // 30 second timeout
+});
+
+await sandbox.exec('ulimit -u 100 && user-command'); // Limit processes
+```
+
+## Security checklist
+
+Before deploying to production:
+
+- [ ] Sandbox IDs are unpredictable and stored securely
+- [ ] User access to sandboxes is validated
+- [ ] All user input is sanitized and validated
+- [ ] Secrets are never hardcoded or logged
+- [ ] Environment variables are used for credentials
+- [ ] Sensitive files have restricted permissions
+- [ ] Command timeouts are set appropriately
+- [ ] Resource limits are enforced
+- [ ] Security events are logged and monitored
+- [ ] Suspicious activity triggers alerts
+- [ ] Port exposure uses authentication tokens
+- [ ] Custom domain is configured for preview URLs
+- [ ] Outbound network access is restricted
+- [ ] Code execution has proper isolation
+- [ ] Data is encrypted at rest when necessary
+- [ ] Cleanup happens even on errors (try/finally)
+
+## Reporting security issues
+
+If you discover a security vulnerability:
+
+1. **Do not** open a public GitHub issue
+2. Email security@cloudflare.com with details
+3. Include reproduction steps if possible
+4. Allow time for response and patching
+
+For general security questions, refer to the [Cloudflare Security documentation](https://developers.cloudflare.com/security/).

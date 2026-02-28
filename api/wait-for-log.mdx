@@ -1,0 +1,156 @@
+---
+title: 'waitForLog'
+description: 'Wait for a log pattern to appear in process output'
+---
+
+Waits for a specific log pattern to appear in a process's stdout or stderr. This is useful for waiting until a service is ready or a specific event occurs.
+
+## Method Signature
+
+```typescript
+await process.waitForLog(
+  pattern: string | RegExp,
+  timeout?: number
+): Promise<WaitForLogResult>
+```
+
+<Note>
+This is a method on the `Process` object returned by `startProcess()`, not on the sandbox itself.
+</Note>
+
+## Parameters
+
+<ParamField path="pattern" type="string | RegExp" required>
+  The pattern to search for in process output. Can be:
+  - A string for exact substring match
+  - A RegExp for pattern matching with capture groups
+</ParamField>
+
+<ParamField path="timeout" type="number">
+  Maximum time to wait in milliseconds. If not specified, waits indefinitely.
+</ParamField>
+
+## Returns
+
+<ResponseField name="WaitForLogResult" type="object">
+  <Expandable title="WaitForLogResult">
+    <ResponseField name="line" type="string">
+      The log line that matched the pattern
+    </ResponseField>
+
+    <ResponseField name="match" type="RegExpMatchArray">
+      Regex capture groups (only present if pattern was a RegExp)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Wait for string in logs
+
+```typescript
+const process = await sandbox.startProcess('npm run dev');
+
+await process.waitForLog('Server running on');
+console.log('Server is ready!');
+```
+
+### Wait for regex pattern
+
+```typescript
+const process = await sandbox.startProcess('python train.py');
+
+const result = await process.waitForLog(/Epoch (\d+) complete/);
+console.log('Matched line:', result.line);
+console.log('Epoch number:', result.match?.[1]);
+```
+
+### Wait with timeout
+
+```typescript
+const process = await sandbox.startProcess('node server.js');
+
+try {
+  await process.waitForLog('listening on port', 10000);
+  console.log('Server started successfully');
+} catch (error) {
+  console.error('Server did not start within 10 seconds');
+}
+```
+
+### Extract values from logs
+
+```typescript
+const process = await sandbox.startProcess(
+  'python -m http.server 8080'
+);
+
+const result = await process.waitForLog(
+  /Serving HTTP on .+ port (\d+)/
+);
+
+const port = result.match?.[1];
+console.log('Server started on port:', port);
+```
+
+### Check multiple patterns
+
+```typescript
+const process = await sandbox.startProcess('npm start');
+
+// Wait for either success or error message
+const waitSuccess = process.waitForLog('Application started');
+const waitError = process.waitForLog('Error:');
+
+const result = await Promise.race([
+  waitSuccess.then(() => 'success'),
+  waitError.then(() => 'error')
+]);
+
+if (result === 'success') {
+  console.log('Application started successfully');
+} else {
+  const logs = await process.getLogs();
+  console.error('Application failed to start:', logs.stderr);
+}
+```
+
+## Error Handling
+
+Throws `ProcessReadyTimeoutError` if the timeout is reached before the pattern appears.
+
+```typescript
+import { ProcessReadyTimeoutError } from '@cloudflare/sandbox';
+
+try {
+  await process.waitForLog('ready', 5000);
+} catch (error) {
+  if (error instanceof ProcessReadyTimeoutError) {
+    console.log('Pattern not found in logs within timeout');
+    const logs = await process.getLogs();
+    console.log('Current logs:', logs.stdout);
+  }
+}
+```
+
+Throws `ProcessExitedBeforeReadyError` if the process exits before the pattern appears.
+
+```typescript
+import { ProcessExitedBeforeReadyError } from '@cloudflare/sandbox';
+
+try {
+  await process.waitForLog('Server started');
+} catch (error) {
+  if (error instanceof ProcessExitedBeforeReadyError) {
+    console.log('Process exited before pattern appeared');
+    const logs = await process.getLogs();
+    console.error('Process output:', logs.stderr);
+  }
+}
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a background process
+- [waitForPort](/api/wait-for-port) - Wait for port readiness
+- [waitForExit](/api/wait-for-exit) - Wait for process exit

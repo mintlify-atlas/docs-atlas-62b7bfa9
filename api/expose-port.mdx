@@ -1,0 +1,202 @@
+---
+title: 'exposePort'
+description: 'Expose a port and get a preview URL'
+---
+
+Exposes an internal port and generates a preview URL for accessing services running in the sandbox. This enables external access to web servers, APIs, and other services.
+
+<Warning>
+Preview URLs require a custom domain with wildcard DNS (`*.yourdomain.com`). `.workers.dev` domains do not support the subdomain patterns needed for port proxying.
+</Warning>
+
+## Method Signature
+
+```typescript
+await sandbox.exposePort(
+  port: number,
+  options: {
+    hostname: string;
+    name?: string;
+    token?: string;
+  }
+): Promise<{ url: string; port: number; name?: string }>
+```
+
+## Parameters
+
+<ParamField path="port" type="number" required>
+  Port number to expose (1024-65535, excluding 3000 which is reserved for the sandbox control plane)
+</ParamField>
+
+<ParamField path="options" type="object" required>
+  Configuration options
+
+  <Expandable title="options">
+    <ParamField path="hostname" type="string" required>
+      Your Worker's domain name (e.g., `example.com`). This is used to construct the preview URL.
+    </ParamField>
+
+    <ParamField path="name" type="string">
+      Optional friendly name for the port
+    </ParamField>
+
+    <ParamField path="token" type="string">
+      Optional custom token for the preview URL (1-16 characters: lowercase letters, numbers, underscores).
+      If not provided, a random 16-character token will be generated automatically.
+      
+      Use custom tokens for stable URLs across deployments.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="result" type="object">
+  <Expandable title="result">
+    <ResponseField name="url" type="string">
+      The preview URL for accessing the exposed port
+      
+      Format: `https://{port}-{sandbox-id}-{token}.{hostname}`
+    </ResponseField>
+
+    <ResponseField name="port" type="number">
+      The exposed port number
+    </ResponseField>
+
+    <ResponseField name="name" type="string">
+      The friendly name (if provided)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Expose a web server
+
+```typescript
+const process = await sandbox.startProcess('python -m http.server 8080');
+await process.waitForPort(8080);
+
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+
+console.log('Server available at:', url);
+// https://8080-sandbox-abc123random4567.example.com
+```
+
+### Expose with custom token
+
+```typescript
+const { url } = await sandbox.exposePort(3000, {
+  hostname: 'example.com',
+  token: 'my_app_v1'
+});
+
+console.log('App available at:', url);
+// https://3000-sandbox-my_app_v1.example.com
+```
+
+### Expose with friendly name
+
+```typescript
+const { url, name } = await sandbox.exposePort(8080, {
+  hostname: 'example.com',
+  name: 'Web Server'
+});
+
+console.log(`${name} available at: ${url}`);
+```
+
+### Expose multiple ports
+
+```typescript
+// Start services on different ports
+await sandbox.startProcess('npm run web'); // port 3000
+await sandbox.startProcess('npm run api'); // port 8080
+
+// Expose both
+const web = await sandbox.exposePort(3000, {
+  hostname: 'example.com',
+  name: 'Web UI'
+});
+
+const api = await sandbox.exposePort(8080, {
+  hostname: 'example.com',
+  name: 'API'
+});
+
+console.log('Web UI:', web.url);
+console.log('API:', api.url);
+```
+
+### Full server lifecycle
+
+```typescript
+// Start server
+const process = await sandbox.startProcess('node server.js');
+
+// Wait for it to be ready
+await process.waitForPort(8080);
+
+// Expose it
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com',
+  token: 'prod_api'
+});
+
+console.log('Server ready at:', url);
+```
+
+## Security
+
+Preview URLs use token-based authentication to prevent unauthorized access:
+
+- Each exposed port gets a unique token (auto-generated or custom)
+- The token is embedded in the subdomain
+- Only requests with the correct token can access the service
+- Tokens are stored securely in Durable Object storage
+
+```typescript
+// Auto-generated token (random, 16 characters)
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+// https://8080-sandbox-a1b2c3d4e5f67890.example.com
+
+// Custom token (predictable, for stable URLs)
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com',
+  token: 'my_token'
+});
+// https://8080-sandbox-my_token.example.com
+```
+
+## Error Handling
+
+```typescript
+import { SecurityError, CustomDomainRequiredError } from '@cloudflare/sandbox';
+
+try {
+  await sandbox.exposePort(8080, { hostname: 'example.workers.dev' });
+} catch (error) {
+  if (error instanceof CustomDomainRequiredError) {
+    console.error('.workers.dev domains are not supported');
+  }
+}
+
+try {
+  await sandbox.exposePort(3000, { hostname: 'example.com' });
+} catch (error) {
+  if (error instanceof SecurityError) {
+    console.error('Port 3000 is reserved for the sandbox control plane');
+  }
+}
+```
+
+## Related Methods
+
+- [unexposePort](/api/unexpose-port) - Remove port exposure
+- [listPorts](/api/list-ports) - List all exposed ports
+- [waitForPort](/api/wait-for-port) - Wait for port readiness
+- [startProcess](/api/start-process) - Start a background process

@@ -1,0 +1,102 @@
+---
+title: 'deleteCodeContext'
+description: 'Delete a code execution context and free its resources'
+---
+
+Deletes a code execution context, releasing all associated resources and state.
+
+## Method Signature
+
+```typescript
+async deleteCodeContext(contextId: string): Promise<void>
+```
+
+## Parameters
+
+<ParamField path="contextId" type="string" required>
+  The unique identifier of the context to delete
+</ParamField>
+
+## Returns
+
+Returns a Promise that resolves when the context is successfully deleted.
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create a context
+const context = await sandbox.createCodeContext({
+  language: 'python'
+});
+
+console.log('Created context:', context.id);
+
+// Use the context
+await sandbox.runCode('print("Hello")', { context });
+
+// Delete when done
+await sandbox.deleteCodeContext(context.id);
+console.log('Context deleted');
+```
+
+## Example: Cleanup After Error
+
+```typescript
+const context = await sandbox.createCodeContext({ language: 'python' });
+
+try {
+  await sandbox.runCode('raise Exception("Test error")', { context });
+} catch (error) {
+  console.error('Execution failed:', error);
+} finally {
+  // Always cleanup
+  await sandbox.deleteCodeContext(context.id);
+}
+```
+
+## Example: Batch Cleanup
+
+```typescript
+// Delete all Python contexts
+const contexts = await sandbox.listCodeContexts();
+const pythonContexts = contexts.filter(c => c.language === 'python');
+
+for (const context of pythonContexts) {
+  await sandbox.deleteCodeContext(context.id);
+}
+
+console.log(`Deleted ${pythonContexts.length} Python contexts`);
+```
+
+## Error Handling
+
+Throws an error if:
+- Context ID does not exist
+- Context is currently executing code
+- Communication with the sandbox fails
+
+```typescript
+try {
+  await sandbox.deleteCodeContext('invalid-id');
+} catch (error) {
+  console.error('Failed to delete context:', error.message);
+}
+```
+
+## Notes
+
+- All context state (variables, execution history) is lost
+- In-progress executions in the context will fail
+- Context IDs cannot be reused
+- Deleting a context does not affect other contexts
+- Resources are automatically freed when the sandbox is destroyed
+
+## See Also
+
+- [createCodeContext](/api/code-interpreter/create-context) - Create a new context
+- [listCodeContexts](/api/code-interpreter/list-contexts) - List all contexts
+- [runCode](/api/code-interpreter/run-code) - Execute code in a context

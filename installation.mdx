@@ -1,0 +1,204 @@
+---
+title: Installation
+description: Install the Cloudflare Sandbox SDK and set up your development environment
+---
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+<Steps>
+  <Step title="Node.js 16.17.0 or later">
+    [Download and install Node.js](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm) if you haven't already.
+    
+    ```bash
+    node --version  # Should be 16.17.0 or higher
+    ```
+  </Step>
+  
+  <Step title="Docker running locally">
+    Docker is required for local development. The sandbox runs in containers that need Docker to build and run.
+    
+    - [Install Docker Desktop](https://docs.docker.com/get-docker/) for macOS or Windows
+    - For Linux, install [Docker Engine](https://docs.docker.com/engine/install/)
+    
+    Verify Docker is running:
+    ```bash
+    docker --version
+    docker ps  # Should not error
+    ```
+  </Step>
+  
+  <Step title="Cloudflare account (for production)">
+    For deploying to production, you'll need a [Cloudflare account](https://dash.cloudflare.com/sign-up/workers-and-pages). Local development works without an account.
+  </Step>
+</Steps>
+
+## Create a new project
+
+The fastest way to get started is using the official template:
+
+```bash
+npm create cloudflare@latest -- my-sandbox --template=cloudflare/sandbox-sdk/examples/minimal
+cd my-sandbox
+```
+
+This creates a new project with:
+- The Sandbox SDK pre-configured
+- A minimal Worker example
+- Docker configuration
+- Wrangler configuration for deployment
+
+## Add to existing project
+
+If you have an existing Cloudflare Workers project, you can add the Sandbox SDK manually.
+
+### Install the package
+
+<CodeGroup>
+```bash npm
+npm install @cloudflare/sandbox
+```
+
+```bash yarn
+yarn add @cloudflare/sandbox
+```
+
+```bash pnpm
+pnpm add @cloudflare/sandbox
+```
+</CodeGroup>
+
+### Create a Dockerfile
+
+Create a `Dockerfile` in your project root. You can use the default image or customize it:
+
+```dockerfile Dockerfile
+FROM ghcr.io/cloudflare/sandbox-sdk:latest
+
+# Optional: Add custom dependencies
+# RUN apt-get update && apt-get install -y your-package
+
+# Optional: Install Python packages
+# RUN pip install --no-cache-dir your-python-package
+```
+
+<Tip>
+The default image includes Python 3.11, Node.js 20, Git, and common utilities. See the [custom containers guide](/installation) to add your own dependencies.
+</Tip>
+
+### Configure Wrangler
+
+Update your `wrangler.jsonc` (or `wrangler.toml`) to configure the Sandbox Durable Object:
+
+```jsonc wrangler.jsonc
+{
+  "name": "my-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "lite",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "Sandbox",
+        "name": "Sandbox"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["Sandbox"],
+      "tag": "v1"
+    }
+  ]
+}
+```
+
+<Note>
+The `migrations` section is required when first deploying a Durable Object. It tells Cloudflare to create the necessary infrastructure.
+</Note>
+
+### Update your Worker
+
+Add the Sandbox export to your Worker code:
+
+```typescript src/index.ts
+import { getSandbox, type Sandbox } from '@cloudflare/sandbox';
+
+// Export the Sandbox Durable Object class
+export { Sandbox } from '@cloudflare/sandbox';
+
+type Env = {
+  Sandbox: DurableObjectNamespace<Sandbox>;
+};
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+    
+    // Your code here
+    const result = await sandbox.exec('echo "Hello from Sandbox!"');
+    
+    return Response.json({ output: result.stdout });
+  }
+};
+```
+
+## Verify installation
+
+Test your setup locally:
+
+```bash
+npm run dev
+```
+
+<Warning>
+The first run builds the Docker container, which takes 2-3 minutes. Subsequent runs are much faster as the image is cached.
+</Warning>
+
+Once the dev server starts, test the sandbox:
+
+```bash
+curl http://localhost:8787
+```
+
+You should see output from your sandbox execution.
+
+## TypeScript support
+
+The SDK includes full TypeScript definitions. If you're using TypeScript, ensure your `tsconfig.json` includes:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"]
+  }
+}
+```
+
+Generate types for your Wrangler configuration:
+
+```bash
+npx wrangler types
+```
+
+This creates a `worker-configuration.d.ts` file with types for your environment bindings.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first sandbox application
+  </Card>
+  <Card title="API reference" icon="book" href="/api-reference">
+    Explore the complete SDK API
+  </Card>
+</CardGroup>

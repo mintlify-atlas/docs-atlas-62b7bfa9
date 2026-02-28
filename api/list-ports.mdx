@@ -1,0 +1,161 @@
+---
+title: 'listPorts'
+description: 'List all exposed ports and their preview URLs'
+---
+
+Returns a list of all currently exposed ports with their preview URLs and status information.
+
+## Method Signature
+
+```typescript
+await sandbox.getExposedPorts(
+  hostname: string
+): Promise<Array<{ url: string; port: number; status: 'active' | 'inactive' }>>
+```
+
+<Note>
+The method is named `getExposedPorts()` on the sandbox object.
+</Note>
+
+## Parameters
+
+<ParamField path="hostname" type="string" required>
+  Your Worker's domain name (e.g., `example.com`). Used to construct the preview URLs in the response.
+</ParamField>
+
+## Returns
+
+<ResponseField name="ports" type="array">
+  Array of exposed port objects
+
+  <Expandable title="Port object">
+    <ResponseField name="url" type="string">
+      The preview URL for accessing the exposed port
+    </ResponseField>
+
+    <ResponseField name="port" type="number">
+      The port number
+    </ResponseField>
+
+    <ResponseField name="status" type="'active' | 'inactive'">
+      Port status:
+      - `active`: Port is exposed and accessible
+      - `inactive`: Port was exposed but may no longer be accessible
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### List all exposed ports
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+
+for (const port of ports) {
+  console.log(`Port ${port.port}: ${port.url} (${port.status})`);
+}
+```
+
+### Check if specific port is exposed
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+const isExposed = ports.some(p => p.port === 8080);
+
+if (isExposed) {
+  console.log('Port 8080 is exposed');
+}
+```
+
+### Get URL for exposed port
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+const port8080 = ports.find(p => p.port === 8080);
+
+if (port8080) {
+  console.log('Access server at:', port8080.url);
+}
+```
+
+### Display all exposed services
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+
+if (ports.length === 0) {
+  console.log('No ports are currently exposed');
+} else {
+  console.log('Exposed services:');
+  ports.forEach(p => {
+    console.log(`  ${p.port}: ${p.url}`);
+  });
+}
+```
+
+### Filter active ports
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+const active = ports.filter(p => p.status === 'active');
+
+console.log(`${active.length} active ports:`);
+active.forEach(p => console.log(`  ${p.port}: ${p.url}`));
+```
+
+### Check port exposure helper
+
+```typescript
+async function isPortExposed(port: number): Promise<boolean> {
+  const ports = await sandbox.getExposedPorts('example.com');
+  return ports.some(p => p.port === port);
+}
+
+if (await isPortExposed(8080)) {
+  console.log('Port 8080 is already exposed');
+} else {
+  await sandbox.exposePort(8080, { hostname: 'example.com' });
+}
+```
+
+## Use Cases
+
+### Dashboard of running services
+
+```typescript
+const processes = await sandbox.listProcesses();
+const ports = await sandbox.getExposedPorts('example.com');
+
+console.log('Running services:');
+for (const port of ports) {
+  const process = processes.find(p => 
+    p.command.includes(port.port.toString())
+  );
+  
+  console.log(`Port ${port.port}:`);
+  console.log(`  URL: ${port.url}`);
+  console.log(`  Status: ${port.status}`);
+  if (process) {
+    console.log(`  Process: ${process.command}`);
+  }
+}
+```
+
+### Clean up inactive ports
+
+```typescript
+const ports = await sandbox.getExposedPorts('example.com');
+const inactive = ports.filter(p => p.status === 'inactive');
+
+for (const port of inactive) {
+  await sandbox.unexposePort(port.port);
+  console.log(`Cleaned up inactive port ${port.port}`);
+}
+```
+
+## Related Methods
+
+- [exposePort](/api/expose-port) - Expose a port with a preview URL
+- [unexposePort](/api/unexpose-port) - Remove port exposure
+- [listProcesses](/api/list-processes) - List all processes

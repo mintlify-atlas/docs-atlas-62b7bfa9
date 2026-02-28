@@ -1,0 +1,394 @@
+---
+title: Managing files
+description: Read, write, organize, and manipulate files in your sandbox with a complete filesystem API.
+---
+
+The Sandbox SDK provides a complete filesystem API for managing files and directories. All operations work within the sandbox's isolated filesystem, defaulting to the `/workspace` directory.
+
+## Writing files
+
+Create or overwrite files with `writeFile()`:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Write a text file
+await sandbox.writeFile('/workspace/hello.txt', 'Hello, Sandbox!');
+
+// Write JSON data
+const data = { name: 'Alice', age: 30 };
+await sandbox.writeFile(
+  '/workspace/data.json',
+  JSON.stringify(data, null, 2)
+);
+
+// Write code
+const script = `
+def greet(name):
+    return f"Hello, {name}!"
+
+print(greet("World"))
+`;
+await sandbox.writeFile('/workspace/greet.py', script);
+```
+
+<Note>
+`writeFile()` creates parent directories automatically. No need to call `mkdir()` first unless you want to set specific permissions.
+</Note>
+
+## Reading files
+
+Read file contents with `readFile()`:
+
+```typescript
+const file = await sandbox.readFile('/workspace/hello.txt');
+
+console.log(file.content);  // "Hello, Sandbox!"
+console.log(file.path);     // "/workspace/hello.txt"
+```
+
+### Reading JSON
+
+```typescript
+const file = await sandbox.readFile('/workspace/data.json');
+const data = JSON.parse(file.content);
+
+console.log(data.name);  // "Alice"
+```
+
+### Reading generated files
+
+```typescript
+// Generate a file with a command
+await sandbox.exec('python3 generate_report.py');
+
+// Read the output
+const report = await sandbox.readFile('/workspace/report.txt');
+console.log(report.content);
+```
+
+## Checking file existence
+
+Check if a file or directory exists before operating on it:
+
+```typescript
+const result = await sandbox.fileExists('/workspace/config.json');
+
+if (result.exists) {
+  console.log(`Found ${result.type}: ${result.path}`);
+  // type is either 'file' or 'directory'
+} else {
+  // Create default config
+  await sandbox.writeFile('/workspace/config.json', '{}');
+}
+```
+
+## Creating directories
+
+Create directories with `mkdir()`:
+
+```typescript
+// Create a single directory
+await sandbox.mkdir('/workspace/output');
+
+// Create nested directories
+await sandbox.mkdir('/workspace/data/processed/2024', {
+  recursive: true
+});
+```
+
+<Warning>
+Without `recursive: true`, `mkdir()` fails if parent directories don't exist. Use `recursive: true` when creating nested directory structures.
+</Warning>
+
+## Listing directory contents
+
+List files and directories with `listFiles()`:
+
+```typescript
+// List files in a directory
+const result = await sandbox.listFiles('/workspace');
+
+console.log(`Found ${result.count} items`);
+
+result.files.forEach(file => {
+  console.log(`${file.type}: ${file.name} (${file.size} bytes)`);
+});
+```
+
+### Recursive listing
+
+List all files in a directory tree:
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  recursive: true
+});
+
+// Find all Python files
+const pythonFiles = result.files.filter(
+  f => f.type === 'file' && f.name.endsWith('.py')
+);
+```
+
+### Including hidden files
+
+```typescript
+const result = await sandbox.listFiles('/workspace', {
+  includeHidden: true  // Include files starting with .
+});
+```
+
+## Moving and renaming files
+
+<CodeGroup>
+
+```typescript Rename
+// Rename a file in the same directory
+await sandbox.renameFile(
+  '/workspace/old-name.txt',
+  '/workspace/new-name.txt'
+);
+```
+
+```typescript Move
+// Move a file to a different directory
+await sandbox.moveFile(
+  '/workspace/data.json',
+  '/workspace/backup/data.json'
+);
+```
+
+</CodeGroup>
+
+<Note>
+Both `renameFile()` and `moveFile()` can be used for renaming and moving. Choose the method that best expresses your intent.
+</Note>
+
+## Deleting files
+
+Remove files with `deleteFile()`:
+
+```typescript
+// Delete a single file
+await sandbox.deleteFile('/workspace/temp.txt');
+
+// Delete multiple files
+const files = ['/workspace/temp1.txt', '/workspace/temp2.txt'];
+for (const file of files) {
+  await sandbox.deleteFile(file);
+}
+```
+
+For directories, use shell commands:
+
+```typescript
+// Remove directory and contents
+await sandbox.exec('rm -rf /workspace/temp');
+
+// Remove empty directory only
+await sandbox.exec('rmdir /workspace/empty-dir');
+```
+
+## Working with large files
+
+For files larger than a few megabytes, use streaming to avoid memory issues:
+
+```typescript
+import { parseSSEStream } from '@cloudflare/sandbox';
+
+// Stream file in chunks
+const stream = await sandbox.readFileStream('/workspace/large-file.json');
+
+let content = '';
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'chunk') {
+    content += event.data;
+  } else if (event.type === 'complete') {
+    console.log('File fully read:', event.path);
+  }
+}
+```
+
+<Warning>
+Reading very large files (>10MB) into memory can cause Workers to exceed memory limits. Consider processing files in chunks or using command-line tools.
+</Warning>
+
+## File patterns and wildcards
+
+Use shell commands for pattern matching:
+
+```typescript
+// Find all JavaScript files
+const result = await sandbox.exec('find /workspace -name "*.js" -type f');
+const jsFiles = result.stdout.trim().split('\n');
+
+// Count Python files
+const count = await sandbox.exec(
+  'find /workspace -name "*.py" -type f | wc -l'
+);
+
+// Delete all .log files
+await sandbox.exec('find /workspace -name "*.log" -type f -delete');
+```
+
+## Common file operations
+
+### Copy files
+
+```typescript
+// Copy a single file
+await sandbox.exec('cp /workspace/source.txt /workspace/dest.txt');
+
+// Copy directory recursively
+await sandbox.exec('cp -r /workspace/src /workspace/backup');
+```
+
+### Archive files
+
+```typescript
+// Create a tar.gz archive
+await sandbox.exec(
+  'tar -czf /workspace/archive.tar.gz /workspace/data'
+);
+
+// Extract an archive
+await sandbox.exec('tar -xzf /workspace/archive.tar.gz');
+
+// Create a zip file
+await sandbox.exec('zip -r /workspace/archive.zip /workspace/data');
+```
+
+### Check file permissions
+
+```typescript
+const result = await sandbox.exec('ls -lh /workspace/script.sh');
+console.log(result.stdout);
+// -rwxr-xr-x 1 root root 1.2K Jan 1 12:00 script.sh
+
+// Make file executable
+await sandbox.exec('chmod +x /workspace/script.sh');
+```
+
+## Working with binary files
+
+For binary files, use base64 encoding:
+
+```typescript
+// Write binary file (base64 encoded)
+const imageData = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+// Decode and write
+await sandbox.exec(
+  `echo '${imageData}' | base64 -d > /workspace/image.png`
+);
+
+// Read binary file
+const result = await sandbox.exec('base64 /workspace/image.png');
+const encoded = result.stdout.trim();
+```
+
+## File watching
+
+Monitor file changes using shell tools:
+
+```typescript
+// Watch for changes (requires inotify-tools)
+const process = await sandbox.startProcess(
+  'inotifywait -m /workspace -e create,modify,delete'
+);
+
+// Stream events
+const stream = await sandbox.streamProcessLogs(process.id);
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    console.log('File change:', event.data);
+  }
+}
+```
+
+## Best practices
+
+<Steps>
+
+### Use absolute paths
+
+Always use absolute paths starting with `/workspace` to avoid confusion about the current working directory.
+
+```typescript
+// Good
+await sandbox.writeFile('/workspace/data.json', data);
+
+// Avoid - relative path behavior depends on session state
+await sandbox.writeFile('data.json', data);
+```
+
+### Check file existence before reading
+
+Prevent errors by checking if files exist:
+
+```typescript
+const exists = await sandbox.fileExists('/workspace/config.json');
+
+if (exists.exists) {
+  const config = await sandbox.readFile('/workspace/config.json');
+  // Process config
+} else {
+  // Handle missing file
+  await sandbox.writeFile('/workspace/config.json', '{}');
+}
+```
+
+### Clean up temporary files
+
+Remove temporary files to avoid filling disk space:
+
+```typescript
+try {
+  // Do work with temp files
+  await sandbox.writeFile('/workspace/temp.txt', data);
+  // Process...
+} finally {
+  // Clean up
+  await sandbox.deleteFile('/workspace/temp.txt');
+}
+```
+
+### Use efficient operations
+
+For bulk operations, use shell commands instead of multiple API calls:
+
+```typescript
+// Slow - multiple round trips
+for (const file of files) {
+  await sandbox.deleteFile(file);
+}
+
+// Fast - single command
+await sandbox.exec(`rm -f ${files.map(f => shellEscape(f)).join(' ')}`);
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Executing commands" icon="terminal" href="/guides/executing-commands">
+  Run shell commands to manipulate files
+</Card>
+
+<Card title="Git integration" icon="git" href="/guides/git-integration">
+  Clone repositories and work with Git
+</Card>
+
+<Card title="Backups and restore" icon="database" href="/guides/backups-and-restore">
+  Create snapshots of your filesystem
+</Card>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Execute long-running background tasks
+</Card>
+
+</CardGroup>

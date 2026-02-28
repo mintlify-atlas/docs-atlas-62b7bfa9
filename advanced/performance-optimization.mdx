@@ -1,0 +1,559 @@
+---
+title: Performance optimization
+description: Techniques for optimizing Cloudflare Sandbox SDK performance, reducing latency, and maximizing throughput
+---
+
+## Overview
+
+The SDK's performance is determined by several factors: container startup time, command execution overhead, network latency, and resource utilization. This guide covers optimization strategies for each area.
+
+## Container lifecycle optimization
+
+### Keep containers warm
+
+Containers sleep after inactivity. Keep them warm to avoid cold starts:
+
+```typescript
+const sandbox = getSandbox(env.SANDBOX, 'warm-container', {
+  keepAlive: true,  // Never auto-sleep
+  sleepAfter: '1h'  // Or extend sleep timeout
+});
+```
+
+**Cold start characteristics:**
+- Initial startup: 2-5 seconds
+- Subsequent operations: &lt;50ms
+
+**Use keepAlive when:**
+- Handling interactive user sessions
+- Running latency-sensitive applications
+- Maintaining long-running processes
+
+**Avoid keepAlive when:**
+- Running batch jobs (pay for idle time)
+- Testing or development (wastes resources)
+- Handling sporadic requests
+
+### Reuse sandbox instances
+
+```typescript
+// Bad: Creates new container for each request
+export default {
+  async fetch(request: Request, env: Env) {
+    const sandbox = getSandbox(env.SANDBOX, `user-${Date.now()}`);
+    await sandbox.exec('command');
+    return new Response('OK');
+  }
+};
+
+// Good: Reuses containers by user ID
+export default {
+  async fetch(request: Request, env: Env) {
+    const userId = request.headers.get('X-User-ID');
+    const sandbox = getSandbox(env.SANDBOX, `user-${userId}`);
+    await sandbox.exec('command');
+    return new Response('OK');
+  }
+};
+```
+
+### Destroy idle containers
+
+Clean up containers to free resources:
+
+```typescript
+// Destroy container when done
+await sandbox.destroy();
+
+// Or use auto-sleep for automatic cleanup
+const sandbox = getSandbox(env.SANDBOX, 'auto-cleanup', {
+  keepAlive: false,  // Default
+  sleepAfter: '10m'  // Sleep after 10 minutes of inactivity
+});
+```
+
+## Command execution optimization
+
+### Batch commands together
+
+```typescript
+// Bad: Multiple round-trips (3 HTTP requests)
+await sandbox.exec('cd /workspace');
+await sandbox.exec('npm install');
+await sandbox.exec('npm run build');
+
+// Good: Single command with chaining (1 HTTP request)
+await sandbox.exec('cd /workspace && npm install && npm run build');
+```
+
+**Latency savings:**
+- Single command: ~50ms total
+- Three commands: ~150ms (3x round-trip)
+
+### Use sessions for related operations
+
+```typescript
+// Create a session for related work
+const session = await sandbox.createSession({
+  id: 'build-session',
+  cwd: '/workspace'
+});
+
+// Working directory persists
+await session.exec('npm install');
+await session.exec('npm run build'); // Already in /workspace
+await session.exec('npm test');
+```
+
+### Parallelize independent operations
+
+```typescript
+// Serialize: 30 seconds total
+await sandbox.exec('npm run build-frontend');  // 15s
+await sandbox.exec('npm run build-backend');   // 15s
+
+// Parallelize: 15 seconds total
+await Promise.all([
+  sandbox.exec('npm run build-frontend'),
+  sandbox.exec('npm run build-backend')
+]);
+```
+
+<Info>
+  Commands in the same session run sequentially due to mutex synchronization. Use different sessions or the default session to enable parallelism.
+</Info>
+
+### Stream output for long-running commands
+
+```typescript
+// Bad: Waits for completion, buffers all output in memory
+const result = await sandbox.exec('npm install');
+console.log(result.stdout); // Only see output after completion
+
+// Good: Stream output in real-time
+const process = await sandbox.startProcess({
+  command: 'npm install'
+});
+
+for await (const log of process.logs()) {
+  console.log(log.output); // See output as it happens
+}
+```
+
+## File operation optimization
+
+### Use streaming for large files
+
+```typescript
+// Bad: Reads entire file into memory (10MB limit)
+const content = await sandbox.files.read('/large-file.bin');
+
+// Good: Stream file contents
+const result = await sandbox.exec('cat /large-file.bin');
+// Or write to bucket mount for direct access
+```
+
+### Batch file operations
+
+```typescript
+// Bad: Multiple API calls
+for (const file of files) {
+  await sandbox.files.write(file.path, file.content);
+}
+
+// Good: Create files in one command
+const script = files.map(f => 
+  `echo ${JSON.stringify(f.content)} > ${f.path}`
+).join(' && ');
+await sandbox.exec(script);
+```
+
+### Use bucket mounts for large datasets
+
+```typescript
+// Mount R2 bucket with dataset
+await sandbox.mountBucket('my-dataset', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'use_cache=/tmp/s3cache',
+    'stat_cache_expire=3600'
+  ]
+});
+
+// Access files directly without copying
+await sandbox.exec('python analyze.py /mnt/data/large-dataset.csv');
+```
+
+## Network optimization
+
+### Use WebSocket transport in Workers/DO
+
+```typescript
+// HTTP: Each operation is a sub-request
+for (let i = 0; i < 100; i++) {
+  await sandbox.exec(`echo ${i}`); // 100 sub-requests
+}
+
+// WebSocket: Single connection, multiplexed requests
+const sandbox = getSandbox(env.SANDBOX, 'ws-sandbox', {
+  useWebSocket: true
+});
+
+for (let i = 0; i < 100; i++) {
+  await sandbox.exec(`echo ${i}`); // 1 sub-request (upgrade)
+}
+```
+
+**When to use WebSocket:**
+- Running in Durable Object with many operations
+- Complex workflows (50+ SDK calls)
+- Approaching Workers sub-request limits (1,000 per request)
+
+### Reduce round-trips with combined operations
+
+```typescript
+// Bad: 3 round-trips
+const exists = await sandbox.files.exists('/config.json');
+if (exists) {
+  const content = await sandbox.files.read('/config.json');
+  const parsed = JSON.parse(content);
+}
+
+// Good: 1 round-trip with error handling
+try {
+  const content = await sandbox.files.read('/config.json');
+  const parsed = JSON.parse(content);
+} catch (error) {
+  if (error instanceof FileNotFoundError) {
+    // Handle missing file
+  }
+}
+```
+
+### Cache read-only data
+
+```typescript
+class ConfigCache {
+  private cache = new Map<string, any>();
+  
+  async get(sandbox: Sandbox, key: string) {
+    if (this.cache.has(key)) {
+      return this.cache.get(key);
+    }
+    
+    const content = await sandbox.files.read(`/config/${key}.json`);
+    const parsed = JSON.parse(content);
+    this.cache.set(key, parsed);
+    return parsed;
+  }
+}
+```
+
+## Concurrency and parallelism
+
+### Understanding the concurrency model
+
+The SDK has multiple concurrency layers:
+
+| Layer | Concurrency Model | Serialization |
+|-------|------------------|---------------|
+| Durable Object | Event loop (single-threaded) | Storage operations only |
+| Container HTTP | Event loop (single-threaded) | Per-session mutex |
+| Shell Processes | True parallelism (OS processes) | None |
+
+### Maximize parallel execution
+
+```typescript
+// Use different sessions for parallel execution
+const sessions = await Promise.all([
+  sandbox.createSession({ id: 'build-frontend' }),
+  sandbox.createSession({ id: 'build-backend' }),
+  sandbox.createSession({ id: 'run-tests' })
+]);
+
+// All three run in parallel
+await Promise.all([
+  sessions[0].exec('npm run build'),
+  sessions[1].exec('npm run build'),
+  sessions[2].exec('npm test')
+]);
+```
+
+### Control concurrency
+
+```typescript
+// Limit concurrent operations to avoid resource exhaustion
+class ConcurrencyLimiter {
+  constructor(private limit: number) {}
+  
+  async map<T, R>(
+    items: T[],
+    fn: (item: T) => Promise<R>
+  ): Promise<R[]> {
+    const results: R[] = [];
+    
+    for (let i = 0; i < items.length; i += this.limit) {
+      const batch = items.slice(i, i + this.limit);
+      const batchResults = await Promise.all(batch.map(fn));
+      results.push(...batchResults);
+    }
+    
+    return results;
+  }
+}
+
+const limiter = new ConcurrencyLimiter(5);
+
+// Process 100 files with max 5 concurrent operations
+await limiter.map(files, async (file) => {
+  return sandbox.files.write(file.path, file.content);
+});
+```
+
+## Resource management
+
+### Monitor memory usage
+
+```typescript
+// Check container memory usage
+const result = await sandbox.exec('free -m');
+console.log('Memory:', result.stdout);
+
+// Clean up large files
+await sandbox.exec('rm -rf /tmp/*');
+```
+
+### Limit process resources
+
+```typescript
+// Limit memory for a command
+await sandbox.exec('ulimit -v 1000000 && memory-intensive-command');
+
+// Set CPU limits
+await sandbox.exec('nice -n 19 cpu-intensive-command');
+```
+
+### Clean up background processes
+
+```typescript
+const process = await sandbox.startProcess({
+  command: 'npm run dev'
+});
+
+try {
+  // Do work
+  await doWork();
+} finally {
+  // Always cleanup
+  await sandbox.killProcess(process.id);
+}
+```
+
+## Code execution optimization
+
+### Preload dependencies
+
+```typescript
+// Create a context once
+const context = await sandbox.createContext({
+  packages: ['numpy', 'pandas', 'matplotlib']
+});
+
+// Reuse for multiple executions (dependencies already loaded)
+await sandbox.runCode('import numpy as np; ...', {
+  language: 'python',
+  contextId: context.id
+});
+
+await sandbox.runCode('import pandas as pd; ...', {
+  language: 'python',
+  contextId: context.id
+});
+```
+
+### Use persistent contexts
+
+```typescript
+// Variables persist across executions
+const context = await sandbox.createContext();
+
+await sandbox.runCode('x = 42', {
+  language: 'python',
+  contextId: context.id
+});
+
+await sandbox.runCode('print(x)', { // x is still defined
+  language: 'python',
+  contextId: context.id
+});
+```
+
+## Monitoring and profiling
+
+### Measure operation latency
+
+```typescript
+class PerformanceMonitor {
+  async measure<T>(
+    name: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const start = Date.now();
+    try {
+      return await fn();
+    } finally {
+      const duration = Date.now() - start;
+      console.log(`${name}: ${duration}ms`);
+    }
+  }
+}
+
+const monitor = new PerformanceMonitor();
+
+await monitor.measure('exec', async () => {
+  return sandbox.exec('npm install');
+});
+```
+
+### Track container metrics
+
+```typescript
+interface ContainerMetrics {
+  operations: number;
+  totalDuration: number;
+  avgDuration: number;
+}
+
+class MetricsCollector {
+  private metrics: ContainerMetrics = {
+    operations: 0,
+    totalDuration: 0,
+    avgDuration: 0
+  };
+  
+  record(duration: number) {
+    this.metrics.operations++;
+    this.metrics.totalDuration += duration;
+    this.metrics.avgDuration = 
+      this.metrics.totalDuration / this.metrics.operations;
+  }
+  
+  report() {
+    return { ...this.metrics };
+  }
+}
+```
+
+### Profile command execution
+
+```typescript
+// Time individual commands
+const result = await sandbox.exec('time npm install');
+console.log('Execution time:', result.stderr); // time output goes to stderr
+
+// Profile with detailed timing
+await sandbox.exec('bash -x script.sh'); // Shows each command as it runs
+```
+
+## Caching strategies
+
+### Cache expensive computations
+
+```typescript
+class ResultCache {
+  private cache = new Map<string, any>();
+  
+  async compute(
+    key: string,
+    fn: () => Promise<any>,
+    ttl: number = 3600000 // 1 hour
+  ) {
+    const cached = this.cache.get(key);
+    if (cached && cached.expires > Date.now()) {
+      return cached.value;
+    }
+    
+    const value = await fn();
+    this.cache.set(key, {
+      value,
+      expires: Date.now() + ttl
+    });
+    
+    return value;
+  }
+}
+
+const cache = new ResultCache();
+
+const result = await cache.compute('build-output', async () => {
+  return sandbox.exec('npm run build');
+});
+```
+
+### Use directory backups
+
+```typescript
+// Cache built dependencies
+await sandbox.exec('npm install');
+
+const backup = await sandbox.createBackup({
+  dir: '/workspace/node_modules',
+  ttl: 86400 // 24 hours
+});
+
+// Restore in new sandbox (skip npm install)
+const newSandbox = getSandbox(env.SANDBOX, 'new-instance');
+await newSandbox.restoreBackup(backup.id);
+```
+
+## Best practices summary
+
+### Container lifecycle
+- ✅ Reuse containers by user/session ID
+- ✅ Use `keepAlive: true` for interactive sessions
+- ✅ Set appropriate `sleepAfter` timeouts
+- ✅ Destroy containers when completely done
+- ❌ Avoid creating new containers per request
+
+### Command execution
+- ✅ Batch related commands with `&&`
+- ✅ Parallelize independent operations
+- ✅ Use sessions to maintain state
+- ✅ Stream output for long-running commands
+- ❌ Avoid excessive round-trips
+
+### File operations
+- ✅ Stream large files
+- ✅ Use bucket mounts for datasets
+- ✅ Batch file writes
+- ✅ Cache read-only data
+- ❌ Avoid reading large files into memory
+
+### Network
+- ✅ Use WebSocket in Workers/DO for many operations
+- ✅ Combine operations to reduce round-trips
+- ✅ Cache frequently-accessed data
+- ❌ Avoid unnecessary file existence checks
+
+### Resource management
+- ✅ Clean up background processes
+- ✅ Monitor memory usage
+- ✅ Limit resource-intensive operations
+- ✅ Delete unused sessions
+- ❌ Avoid memory leaks from unclosed streams
+
+## Performance checklist
+
+Before deploying to production:
+
+- [ ] Containers are reused by user/session ID
+- [ ] Related commands are batched together
+- [ ] Independent operations run in parallel
+- [ ] WebSocket transport is used in Workers/DO (if many operations)
+- [ ] Large files use streaming or bucket mounts
+- [ ] Background processes are cleaned up properly
+- [ ] Memory usage is monitored and controlled
+- [ ] Appropriate timeouts are set
+- [ ] Caching is used for expensive operations
+- [ ] Metrics are collected for monitoring

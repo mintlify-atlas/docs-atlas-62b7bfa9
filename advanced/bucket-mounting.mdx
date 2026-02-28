@@ -1,0 +1,576 @@
+---
+title: Bucket mounting
+description: Mount S3-compatible object storage buckets as filesystems in your sandbox using s3fs
+---
+
+## Overview
+
+Bucket mounting allows you to access cloud object storage (S3, R2, GCS) as a regular filesystem within your sandbox. This enables seamless integration with existing tools and workflows that expect file-based access.
+
+## Supported providers
+
+The SDK automatically detects and configures settings for these providers:
+
+- **AWS S3** - Amazon's object storage service
+- **Cloudflare R2** - S3-compatible storage with zero egress fees
+- **Google Cloud Storage (GCS)** - Google's object storage with S3 compatibility
+- **Generic S3-compatible** - Any service implementing the S3 API
+
+## Basic usage
+
+### Mount a bucket
+
+Mount an S3-compatible bucket to a directory in your sandbox:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Mount R2 bucket
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  }
+});
+
+// Now access files normally
+await sandbox.exec('ls /mnt/data');
+await sandbox.exec('cat /mnt/data/file.txt');
+```
+
+### Unmount a bucket
+
+Clean up mounts when finished:
+
+```typescript
+await sandbox.unmountBucket('/mnt/data');
+```
+
+## Provider configuration
+
+### Cloudflare R2
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/r2', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  },
+  provider: 'r2'
+});
+```
+
+<Info>
+  R2 mounts automatically use the `nomixupload` flag for optimal performance. Mixed multipart uploads are not supported by R2.
+</Info>
+
+### AWS S3
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/s3', {
+  endpoint: 'https://s3.us-west-2.amazonaws.com',
+  credentials: {
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.AWS_SECRET_ACCESS_KEY
+  },
+  provider: 's3'
+});
+```
+
+### Google Cloud Storage
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/gcs', {
+  endpoint: 'https://storage.googleapis.com',
+  credentials: {
+    accessKeyId: env.GCS_ACCESS_KEY_ID,
+    secretAccessKey: env.GCS_SECRET_ACCESS_KEY
+  },
+  provider: 'gcs'
+});
+```
+
+### Generic S3-compatible storage
+
+For other S3-compatible services:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/storage', {
+  endpoint: 'https://storage.example.com',
+  credentials: {
+    accessKeyId: env.ACCESS_KEY_ID,
+    secretAccessKey: env.SECRET_ACCESS_KEY
+  },
+  // Provider detection will use path-style requests by default
+  s3fsOptions: ['use_path_request_style']
+});
+```
+
+## Advanced options
+
+### Mount a subdirectory
+
+Mount only a specific prefix within a bucket:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  prefix: '/datasets/production/'
+});
+
+// Only files under /datasets/production/ are accessible
+await sandbox.exec('ls /mnt/data'); // Shows bucket contents under that prefix
+```
+
+<Warning>
+  Prefix must start with `/`. Use `/prefix/` not `prefix/`.
+</Warning>
+
+### Custom s3fs options
+
+Override or add s3fs mount flags:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'use_cache=/tmp/s3cache',
+    'parallel_count=5',
+    'multipart_size=50',
+    'max_stat_cache_size=100000'
+  ]
+});
+```
+
+Common s3fs options:
+
+| Option | Description |
+|--------|-------------|
+| `use_cache=<dir>` | Enable local disk cache for performance |
+| `parallel_count=<n>` | Number of parallel uploads (default: 5) |
+| `multipart_size=<mb>` | Multipart upload chunk size in MB |
+| `use_path_request_style` | Use path-style URLs (required for some providers) |
+| `nomixupload` | Disable mixed multipart uploads (R2 requirement) |
+| `max_stat_cache_size=<n>` | Maximum entries in stat cache |
+| `stat_cache_expire=<sec>` | Stat cache expiration in seconds |
+
+See [s3fs documentation](https://github.com/s3fs-fuse/s3fs-fuse/wiki/Fuse-Over-Amazon) for complete options.
+
+### Read-only mounts
+
+Mount a bucket in read-only mode:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/readonly', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: ['ro'] // Read-only flag
+});
+
+// Write operations will fail
+await sandbox.exec('touch /mnt/readonly/file.txt'); // Error: Read-only file system
+```
+
+## Credential management
+
+### Explicit credentials
+
+Pass credentials directly in the mount options:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: {
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY
+  }
+});
+```
+
+### Environment variables
+
+The SDK automatically detects credentials from standard AWS environment variables:
+
+```typescript
+// Set environment variables in the sandbox
+await sandbox.exec('export AWS_ACCESS_KEY_ID=your-key-id');
+await sandbox.exec('export AWS_SECRET_ACCESS_KEY=your-secret-key');
+
+// Mount without explicit credentials
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com'
+  // Credentials detected from environment
+});
+```
+
+<Info>
+  Credential priority: explicit `credentials` option → `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables → error if none found.
+</Info>
+
+### Security best practices
+
+**Store credentials securely:**
+
+```typescript
+// Good: Use environment bindings
+const credentials = {
+  accessKeyId: env.R2_ACCESS_KEY_ID,
+  secretAccessKey: env.R2_SECRET_ACCESS_KEY
+};
+
+// Bad: Hardcoded credentials
+const credentials = {
+  accessKeyId: 'your-key-id', // Never commit credentials!
+  secretAccessKey: 'your-secret-key'
+};
+```
+
+**Use least-privilege policies:**
+
+Grant only necessary permissions for your use case:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::my-bucket",
+        "arn:aws:s3:::my-bucket/*"
+      ]
+    }
+  ]
+}
+```
+
+## Mount validation
+
+### Bucket name validation
+
+Bucket names must follow DNS naming rules:
+
+```typescript
+// Valid bucket names
+await sandbox.mountBucket('my-bucket', '/mnt/data', { ... });
+await sandbox.mountBucket('my.bucket-123', '/mnt/data', { ... });
+
+// Invalid bucket names
+try {
+  await sandbox.mountBucket('My-Bucket', '/mnt/data', { ... }); // Uppercase
+} catch (error) {
+  console.error(error.message); // Invalid bucket name
+}
+
+try {
+  await sandbox.mountBucket('my_bucket', '/mnt/data', { ... }); // Underscores
+} catch (error) {
+  console.error(error.message); // Invalid bucket name
+}
+```
+
+Rules enforced:
+- 3-63 characters
+- Lowercase alphanumeric, dots, or hyphens only
+- Cannot start or end with dots or hyphens
+- No consecutive dots
+
+### Mount path validation
+
+Mount paths must be absolute:
+
+```typescript
+// Valid
+await sandbox.mountBucket('my-bucket', '/mnt/data', { ... });
+
+// Invalid
+try {
+  await sandbox.mountBucket('my-bucket', 'data', { ... });
+} catch (error) {
+  console.error('Mount path must be absolute');
+}
+```
+
+## Error handling
+
+### Common errors
+
+**Missing credentials:**
+
+```typescript
+try {
+  await sandbox.mountBucket('my-bucket', '/mnt/data', {
+    endpoint: 'https://account-id.r2.cloudflarestorage.com'
+    // No credentials provided or in environment
+  });
+} catch (error) {
+  if (error.code === 'MISSING_CREDENTIALS') {
+    console.error('Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY');
+  }
+}
+```
+
+**Invalid mount configuration:**
+
+```typescript
+try {
+  await sandbox.mountBucket('My:Bucket', '/mnt/data', { ... });
+} catch (error) {
+  if (error.code === 'INVALID_MOUNT_CONFIG') {
+    console.error('Invalid bucket name or mount path');
+  }
+}
+```
+
+**Mount operation failed:**
+
+```typescript
+try {
+  await sandbox.mountBucket('my-bucket', '/mnt/data', {
+    endpoint: 'https://wrong-endpoint.com',
+    credentials: { ... }
+  });
+} catch (error) {
+  if (error.code === 'S3FS_MOUNT_ERROR') {
+    console.error('Failed to mount bucket:', error.message);
+    // Check endpoint, credentials, and network connectivity
+  }
+}
+```
+
+### Error codes
+
+| Code | Description | Solution |
+|------|-------------|----------|
+| `MISSING_CREDENTIALS` | No credentials found | Set environment variables or pass explicit credentials |
+| `INVALID_MOUNT_CONFIG` | Invalid bucket name or path | Check bucket naming rules and use absolute paths |
+| `S3FS_MOUNT_ERROR` | s3fs mount command failed | Verify endpoint, credentials, and bucket exists |
+| `BUCKET_MOUNT_ERROR` | Generic mount error | Check error message for details |
+
+## Performance optimization
+
+### Enable local caching
+
+Improve read performance with local disk cache:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'use_cache=/tmp/s3cache',
+    'stat_cache_expire=900', // 15 minutes
+    'max_stat_cache_size=100000'
+  ]
+});
+```
+
+### Adjust multipart settings
+
+Optimize for large files:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'multipart_size=50', // 50MB chunks
+    'parallel_count=10'   // 10 parallel uploads
+  ]
+});
+```
+
+### Reduce metadata operations
+
+Minimize S3 API calls for listing operations:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'stat_cache_expire=3600', // Cache metadata for 1 hour
+    'enable_noobj_cache'      // Cache non-existent file checks
+  ]
+});
+```
+
+## Common patterns
+
+### Data processing workflow
+
+```typescript
+// Mount input and output buckets
+await sandbox.mountBucket('input-data', '/mnt/input', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: ['ro'] // Read-only
+});
+
+await sandbox.mountBucket('output-data', '/mnt/output', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... }
+});
+
+// Process data
+await sandbox.exec('python process.py --input /mnt/input --output /mnt/output');
+
+// Cleanup
+await sandbox.unmountBucket('/mnt/input');
+await sandbox.unmountBucket('/mnt/output');
+```
+
+### Multi-bucket analysis
+
+```typescript
+const buckets = ['sales-2023', 'sales-2024', 'sales-2025'];
+
+// Mount all buckets
+for (const bucket of buckets) {
+  await sandbox.mountBucket(bucket, `/mnt/${bucket}`, {
+    endpoint: 'https://account-id.r2.cloudflarestorage.com',
+    credentials: { ... }
+  });
+}
+
+// Analyze across all buckets
+await sandbox.exec('python analyze.py /mnt/sales-*');
+
+// Cleanup all mounts
+for (const bucket of buckets) {
+  await sandbox.unmountBucket(`/mnt/${bucket}`);
+}
+```
+
+### Temporary mount for backup
+
+```typescript
+try {
+  // Mount backup bucket temporarily
+  await sandbox.mountBucket('backups', '/mnt/backup', {
+    endpoint: 'https://account-id.r2.cloudflarestorage.com',
+    credentials: { ... }
+  });
+  
+  // Create backup
+  await sandbox.exec('tar czf /mnt/backup/backup.tar.gz /workspace');
+} finally {
+  // Always unmount
+  await sandbox.unmountBucket('/mnt/backup');
+}
+```
+
+## Limitations
+
+### FUSE overhead
+
+s3fs uses FUSE (Filesystem in Userspace), which adds overhead compared to native filesystem operations:
+
+- **Small files**: Multiple S3 API calls per operation
+- **Metadata operations**: Each `stat()` call may hit S3
+- **Latency**: Network round-trips for every operation
+
+Consider copying frequently-accessed files to local storage:
+
+```typescript
+// Mount bucket
+await sandbox.mountBucket('my-bucket', '/mnt/data', { ... });
+
+// Copy to local for faster access
+await sandbox.exec('cp -r /mnt/data/dataset /tmp/dataset');
+
+// Work with local copy
+await sandbox.exec('process-data /tmp/dataset');
+
+// Copy results back
+await sandbox.exec('cp /tmp/output.csv /mnt/data/output.csv');
+```
+
+### Concurrent writes
+
+s3fs does not support concurrent writes to the same file:
+
+```typescript
+// This may result in data corruption
+await Promise.all([
+  sandbox.exec('echo "data1" >> /mnt/data/file.txt'),
+  sandbox.exec('echo "data2" >> /mnt/data/file.txt')
+]);
+
+// Use separate files instead
+await Promise.all([
+  sandbox.exec('echo "data1" > /mnt/data/file1.txt'),
+  sandbox.exec('echo "data2" > /mnt/data/file2.txt')
+]);
+```
+
+### Memory usage
+
+Large file uploads are buffered in memory. Monitor memory usage when working with large files:
+
+```typescript
+// Large file upload may consume significant memory
+await sandbox.exec('cp 10GB-file.bin /mnt/data/');
+
+// Consider using multipart upload directly with AWS SDK
+```
+
+## Troubleshooting
+
+### Mount fails with authentication error
+
+Verify credentials and bucket permissions:
+
+```typescript
+// Test credentials with AWS CLI
+await sandbox.exec('aws s3 ls s3://my-bucket --endpoint-url=https://...');
+```
+
+### Operations are slow
+
+Enable caching and adjust cache settings:
+
+```typescript
+await sandbox.mountBucket('my-bucket', '/mnt/data', {
+  endpoint: 'https://account-id.r2.cloudflarestorage.com',
+  credentials: { ... },
+  s3fsOptions: [
+    'use_cache=/tmp/cache',
+    'stat_cache_expire=3600',
+    'max_stat_cache_size=1000000',
+    'enable_noobj_cache'
+  ]
+});
+```
+
+### Files not visible after upload
+
+S3 has eventual consistency. Add a small delay:
+
+```typescript
+await sandbox.exec('echo "data" > /mnt/data/file.txt');
+await new Promise(resolve => setTimeout(resolve, 1000));
+await sandbox.exec('ls /mnt/data/file.txt');
+```
+
+### Cannot unmount bucket
+
+Check for processes using the mount:
+
+```typescript
+// See what's using the mount
+await sandbox.exec('lsof /mnt/data');
+
+// Force unmount if needed (may lose data)
+await sandbox.exec('umount -f /mnt/data');
+```

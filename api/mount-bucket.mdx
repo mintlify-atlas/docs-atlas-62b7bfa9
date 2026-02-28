@@ -1,0 +1,217 @@
+---
+title: 'mountBucket'
+description: 'Mount an S3-compatible bucket as a local directory in the sandbox'
+---
+
+Mounts an S3-compatible bucket (R2, S3, GCS) as a local directory using S3FS-FUSE, enabling direct filesystem access to object storage.
+
+## Method Signature
+
+```typescript
+async mountBucket(
+  bucket: string,
+  mountPath: string,
+  options: MountBucketOptions
+): Promise<void>
+```
+
+## Parameters
+
+<ParamField path="bucket" type="string" required>
+  Bucket name to mount
+</ParamField>
+
+<ParamField path="mountPath" type="string" required>
+  Absolute path in container to mount at (e.g., `/mnt/data`)
+</ParamField>
+
+<ParamField path="options" type="MountBucketOptions" required>
+  Mount configuration options
+  
+  <Expandable title="properties">
+    <ParamField path="endpoint" type="string" required>
+      S3-compatible endpoint URL. Examples:
+      - R2: `https://abc123.r2.cloudflarestorage.com`
+      - S3: `https://s3.us-west-2.amazonaws.com`
+      - GCS: `https://storage.googleapis.com`
+    </ParamField>
+    
+    <ParamField path="provider" type="'r2' | 's3' | 'gcs'" optional>
+      Optional provider hint for automatic flag configuration. If not specified, detected from endpoint URL.
+    </ParamField>
+    
+    <ParamField path="credentials" type="BucketCredentials" optional>
+      Explicit credentials (overrides env var auto-detection)
+      <Expandable title="properties">
+        <ParamField path="accessKeyId" type="string" required>
+          Access key ID
+        </ParamField>
+        <ParamField path="secretAccessKey" type="string" required>
+          Secret access key
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField path="readOnly" type="boolean" default={false}>
+      Mount filesystem as read-only
+    </ParamField>
+    
+    <ParamField path="prefix" type="string" optional>
+      Optional subdirectory within the bucket to mount (must start with `/`). Enables multi-tenant isolation.
+    </ParamField>
+    
+    <ParamField path="s3fsOptions" type="string[]" optional>
+      Advanced: Override or extend s3fs options. Common options:
+      - `use_path_request_style` - Use path-style URLs
+      - `nomixupload` - Disable mixed multipart uploads
+      - `nomultipart` - Disable all multipart operations
+      - `sigv2` - Use signature version 2
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+Returns a Promise that resolves when the bucket is successfully mounted.
+
+## Example: Mount R2 Bucket
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Mount R2 bucket
+await sandbox.mountBucket(
+  'my-data-bucket',
+  '/mnt/data',
+  {
+    endpoint: 'https://abc123.r2.cloudflarestorage.com',
+    provider: 'r2',
+    credentials: {
+      accessKeyId: env.R2_ACCESS_KEY_ID,
+      secretAccessKey: env.R2_SECRET_ACCESS_KEY
+    }
+  }
+);
+
+// Access files through filesystem
+const files = await sandbox.listFiles('/mnt/data');
+console.log('Files in bucket:', files.files.length);
+
+await sandbox.exec('cat /mnt/data/config.json');
+```
+
+## Example: Mount AWS S3
+
+```typescript
+await sandbox.mountBucket(
+  'my-s3-bucket',
+  '/mnt/s3',
+  {
+    endpoint: 'https://s3.us-west-2.amazonaws.com',
+    provider: 's3',
+    credentials: {
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY
+    }
+  }
+);
+```
+
+## Example: Read-Only Mount with Prefix
+
+```typescript
+// Mount only /sessions/user123 subdirectory as read-only
+await sandbox.mountBucket(
+  'shared-data',
+  '/mnt/user-data',
+  {
+    endpoint: 'https://abc123.r2.cloudflarestorage.com',
+    prefix: '/sessions/user123',
+    readOnly: true,
+    credentials: {
+      accessKeyId: env.R2_ACCESS_KEY_ID,
+      secretAccessKey: env.R2_SECRET_ACCESS_KEY
+    }
+  }
+);
+
+// /mnt/user-data now shows contents of bucket's /sessions/user123
+const files = await sandbox.listFiles('/mnt/user-data');
+```
+
+## Example: Environment Variable Credentials
+
+```typescript
+// Set credentials via environment variables
+await sandbox.setEnvVars({
+  AWS_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID,
+  AWS_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY
+});
+
+// Mount without explicit credentials (auto-detected from env)
+await sandbox.mountBucket(
+  'my-bucket',
+  '/mnt/data',
+  {
+    endpoint: 'https://abc123.r2.cloudflarestorage.com',
+    provider: 'r2'
+    // credentials omitted - uses env vars
+  }
+);
+```
+
+## Example: Unmount When Done
+
+```typescript
+try {
+  await sandbox.mountBucket('temp-data', '/mnt/temp', options);
+  
+  // Use the mount
+  await sandbox.exec('process-files.sh /mnt/temp');
+} finally {
+  // Cleanup
+  await sandbox.unmountBucket('/mnt/temp');
+}
+```
+
+## Error Handling
+
+Throws an error if:
+- Endpoint is invalid or not provided
+- Bucket name is invalid
+- Mount path is invalid (not absolute)
+- Mount path already in use
+- Credentials are missing or invalid
+- Bucket does not exist or is not accessible
+- S3FS mount command fails
+
+```typescript
+try {
+  await sandbox.mountBucket('my-bucket', '/mnt/data', options);
+} catch (error) {
+  if (error.code === 'INVALID_MOUNT_CONFIG') {
+    console.error('Invalid mount configuration:', error.message);
+  } else if (error.code === 'S3FS_MOUNT_ERROR') {
+    console.error('Mount failed:', error.message);
+  }
+}
+```
+
+## Notes
+
+- Mounts persist until explicitly unmounted or sandbox is destroyed
+- Multiple buckets can be mounted at different paths
+- Files are accessed directly through filesystem APIs
+- Write operations sync to object storage automatically
+- Large files may have performance implications
+- Credentials are stored securely in temporary files with restricted permissions
+- Password files are automatically cleaned up on unmount or sandbox destruction
+- Prefix isolation enables multi-tenant scenarios with a single bucket
+
+## See Also
+
+- [unmountBucket](/api/mount-bucket) - Unmount a bucket (if implemented)
+- [listFiles](/api/list-files) - List files in mounted directories
+- [Bucket Mounting Guide](/advanced/bucket-mounting) - Learn about bucket mounting patterns

@@ -1,0 +1,504 @@
+---
+title: Git integration
+description: Clone repositories, manage branches, and work with Git repositories inside sandboxes.
+---
+
+The Sandbox SDK provides native Git integration for cloning repositories and working with version control. Perfect for analyzing code, running tests against multiple branches, or building CI/CD pipelines.
+
+## Cloning repositories
+
+Use `checkout()` to clone a Git repository into your sandbox:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Clone a repository
+const result = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk'
+);
+
+console.log(`Cloned to: ${result.targetDir}`);
+console.log(`Branch: ${result.branch}`);
+console.log(`Commit: ${result.commit}`);
+```
+
+<Note>
+The repository is cloned to `/workspace/{repo-name}` by default. The SDK automatically extracts the repository name from the URL.
+</Note>
+
+## Specifying branches
+
+Clone a specific branch:
+
+```typescript
+// Clone the 'develop' branch
+const result = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk',
+  { branch: 'develop' }
+);
+
+console.log(`Cloned branch: ${result.branch}`);
+```
+
+Without specifying a branch, Git uses the repository's default branch (usually `main` or `master`).
+
+## Custom target directories
+
+Specify where to clone the repository:
+
+```typescript
+// Clone to a custom location
+const result = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk',
+  { targetDir: '/workspace/my-project' }
+);
+
+console.log(`Cloned to: ${result.targetDir}`);
+```
+
+## Shallow clones
+
+For faster clones of large repositories, use shallow clones:
+
+```typescript
+// Clone only the latest commit
+const result = await sandbox.checkout(
+  'https://github.com/torvalds/linux',
+  { depth: 1 }
+);
+
+// Clone last 10 commits
+const result = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk',
+  { depth: 10 }
+);
+```
+
+<Note>
+Shallow clones significantly reduce clone time and disk usage for large repositories. Use `depth: 1` when you only need the latest code.
+</Note>
+
+## Private repositories
+
+Clone private repositories using authentication tokens:
+
+```typescript
+// GitHub personal access token
+const token = env.GITHUB_TOKEN;
+const repoUrl = `https://${token}@github.com/your-org/private-repo.git`;
+
+const result = await sandbox.checkout(repoUrl);
+```
+
+<Warning>
+Never hardcode tokens in your code. Use environment variables or Workers secrets to store authentication credentials securely.
+</Warning>
+
+## Working with cloned repositories
+
+Once cloned, use standard Git commands:
+
+### Check repository status
+
+```typescript
+const result = await sandbox.exec(
+  'git status',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+
+console.log(result.stdout);
+```
+
+### List branches
+
+```typescript
+const result = await sandbox.exec(
+  'git branch -a',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+
+const branches = result.stdout.trim().split('\n');
+console.log('Branches:', branches);
+```
+
+### Get commit history
+
+```typescript
+const result = await sandbox.exec(
+  'git log --oneline -10',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+
+console.log('Recent commits:');
+console.log(result.stdout);
+```
+
+### Show diff
+
+```typescript
+const result = await sandbox.exec(
+  'git diff HEAD~1',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+
+console.log('Changes in last commit:');
+console.log(result.stdout);
+```
+
+## Switching branches
+
+Switch to different branches after cloning:
+
+```typescript
+// Clone repository
+await sandbox.checkout('https://github.com/cloudflare/sandbox-sdk');
+
+// Switch to feature branch
+await sandbox.exec(
+  'git checkout feature-branch',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+
+// Create and switch to new branch
+await sandbox.exec(
+  'git checkout -b new-feature',
+  { cwd: '/workspace/sandbox-sdk' }
+);
+```
+
+## Making changes
+
+### Modify files
+
+```typescript
+// Clone repository
+await sandbox.checkout('https://github.com/user/repo');
+
+// Modify a file
+const readme = await sandbox.readFile('/workspace/repo/README.md');
+const updated = readme.content + '\n## New Section\n';
+await sandbox.writeFile('/workspace/repo/README.md', updated);
+
+// Stage and commit
+await sandbox.exec('git add README.md', {
+  cwd: '/workspace/repo'
+});
+
+await sandbox.exec(
+  'git commit -m "Update README"',
+  { cwd: '/workspace/repo' }
+);
+```
+
+### Configure Git user
+
+```typescript
+// Set Git identity
+await sandbox.exec(
+  'git config user.name "Sandbox User"',
+  { cwd: '/workspace/repo' }
+);
+
+await sandbox.exec(
+  'git config user.email "sandbox@example.com"',
+  { cwd: '/workspace/repo' }
+);
+```
+
+## Common patterns
+
+### Clone and analyze
+
+```typescript
+// Clone repository
+const repo = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk'
+);
+
+// Count lines of code
+const loc = await sandbox.exec(
+  'find . -name "*.ts" | xargs wc -l | tail -1',
+  { cwd: repo.targetDir }
+);
+
+console.log('Lines of TypeScript:', loc.stdout);
+
+// Find TODOs
+const todos = await sandbox.exec(
+  'grep -r "TODO" --include="*.ts"',
+  { cwd: repo.targetDir }
+);
+
+console.log('TODOs found:');
+console.log(todos.stdout);
+```
+
+### Test multiple branches
+
+```typescript
+const branches = ['main', 'develop', 'feature-a'];
+const results = [];
+
+for (const branch of branches) {
+  // Clone specific branch
+  await sandbox.checkout(
+    'https://github.com/user/repo',
+    { branch, targetDir: `/workspace/repo-${branch}` }
+  );
+  
+  // Run tests
+  const test = await sandbox.exec('npm test', {
+    cwd: `/workspace/repo-${branch}`
+  });
+  
+  results.push({
+    branch,
+    passed: test.exitCode === 0
+  });
+}
+
+return Response.json({ results });
+```
+
+### Install dependencies
+
+```typescript
+// Clone repository
+const repo = await sandbox.checkout(
+  'https://github.com/user/node-project'
+);
+
+// Install npm dependencies
+const install = await sandbox.exec('npm install', {
+  cwd: repo.targetDir,
+  stream: true,
+  onOutput: (stream, data) => {
+    console.log(data);
+  }
+});
+
+if (install.success) {
+  // Run the project
+  const run = await sandbox.startProcess('npm start', {
+    cwd: repo.targetDir
+  });
+  
+  await run.waitForPort(3000);
+  console.log('Project running!');
+}
+```
+
+### Build and test
+
+```typescript
+// Clone repository
+await sandbox.checkout(
+  'https://github.com/user/project',
+  { depth: 1 }  // Fast shallow clone
+);
+
+// Install dependencies
+const install = await sandbox.exec('npm ci', {
+  cwd: '/workspace/project'
+});
+
+if (!install.success) {
+  throw new Error('Failed to install dependencies');
+}
+
+// Build
+const build = await sandbox.exec('npm run build', {
+  cwd: '/workspace/project'
+});
+
+if (!build.success) {
+  throw new Error('Build failed: ' + build.stderr);
+}
+
+// Run tests
+const test = await sandbox.exec('npm test', {
+  cwd: '/workspace/project'
+});
+
+return Response.json({
+  success: test.exitCode === 0,
+  output: test.stdout,
+  errors: test.stderr
+});
+```
+
+### Clone and explore
+
+```typescript
+// Clone repository
+const repo = await sandbox.checkout(
+  'https://github.com/cloudflare/sandbox-sdk'
+);
+
+// Get repository info
+const info = {
+  commit: repo.commit,
+  branch: repo.branch,
+  directory: repo.targetDir
+};
+
+// List files
+const files = await sandbox.listFiles(repo.targetDir, {
+  recursive: true
+});
+
+// Get commit message
+const message = await sandbox.exec(
+  'git log -1 --pretty=%B',
+  { cwd: repo.targetDir }
+);
+
+return Response.json({
+  ...info,
+  totalFiles: files.count,
+  lastCommitMessage: message.stdout.trim()
+});
+```
+
+## Submodules
+
+Clone repositories with submodules:
+
+```typescript
+// Clone with submodules
+await sandbox.checkout('https://github.com/user/repo-with-submodules');
+
+// Initialize and update submodules
+await sandbox.exec(
+  'git submodule update --init --recursive',
+  { cwd: '/workspace/repo-with-submodules' }
+);
+```
+
+## Large repositories
+
+Optimize cloning large repositories:
+
+```typescript
+// Use shallow clone
+const result = await sandbox.checkout(
+  'https://github.com/torvalds/linux',
+  {
+    depth: 1,  // Only latest commit
+    branch: 'master'
+  }
+);
+
+console.log(`Cloned commit: ${result.commit}`);
+
+// Optionally fetch more history later
+await sandbox.exec(
+  'git fetch --depth=100',
+  { cwd: result.targetDir }
+);
+```
+
+## Error handling
+
+Handle clone failures gracefully:
+
+```typescript
+try {
+  const result = await sandbox.checkout(
+    'https://github.com/user/repo',
+    { branch: 'nonexistent' }
+  );
+} catch (error) {
+  console.error('Clone failed:', error.message);
+  
+  // Check if repository exists
+  if (error.message.includes('not found')) {
+    return Response.json(
+      { error: 'Repository not found' },
+      { status: 404 }
+    );
+  }
+  
+  // Check if branch exists
+  if (error.message.includes('branch')) {
+    return Response.json(
+      { error: 'Branch not found' },
+      { status: 400 }
+    );
+  }
+  
+  throw error;
+}
+```
+
+## Best practices
+
+<Steps>
+
+### Use shallow clones for speed
+
+When you only need the latest code, use `depth: 1` to significantly reduce clone time:
+
+```typescript
+await sandbox.checkout(repoUrl, { depth: 1 });
+```
+
+### Store tokens securely
+
+Never hardcode authentication tokens. Use environment variables:
+
+```typescript
+// Good
+const token = env.GITHUB_TOKEN;
+const url = `https://${token}@github.com/org/repo.git`;
+
+// Bad
+const url = 'https://ghp_abc123@github.com/org/repo.git';
+```
+
+### Specify working directory
+
+Always specify `cwd` when running Git commands:
+
+```typescript
+await sandbox.exec('git status', {
+  cwd: '/workspace/repo'  // Explicit working directory
+});
+```
+
+### Clean up after use
+
+Remove cloned repositories when done to free disk space:
+
+```typescript
+try {
+  await sandbox.checkout(repoUrl);
+  // Work with repository...
+} finally {
+  await sandbox.exec('rm -rf /workspace/repo');
+}
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Executing commands" icon="terminal" href="/guides/executing-commands">
+  Run Git commands in your sandbox
+</Card>
+
+<Card title="Managing files" icon="folder" href="/guides/managing-files">
+  Work with cloned repository files
+</Card>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Build and run cloned projects
+</Card>
+
+<Card title="Backups and restore" icon="database" href="/guides/backups-and-restore">
+  Save repository state with backups
+</Card>
+
+</CardGroup>

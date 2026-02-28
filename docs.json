@@ -1,122 +1,186 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Cloudflare Sandbox SDK",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#F38020",
+    "light": "#F38020",
+    "dark": "#F38020"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/cloudflare/sandbox-sdk"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/cloudflare/sandbox-sdk"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/sandbox-instances",
+              "concepts/command-execution",
+              "concepts/file-operations",
+              "concepts/sessions",
+              "concepts/processes",
+              "concepts/code-interpreter"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "guides/executing-commands",
+              "guides/managing-files",
+              "guides/running-processes",
+              "guides/exposing-ports",
+              "guides/git-integration",
+              "guides/code-interpreter",
+              "guides/streaming-output",
+              "guides/backups-and-restore"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Advanced",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "advanced/sessions-and-state",
+              "advanced/bucket-mounting",
+              "advanced/websocket-transport",
+              "advanced/error-handling",
+              "advanced/performance-optimization",
+              "advanced/security-considerations"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/ai-code-execution",
+              "examples/openai-agents",
+              "examples/claude-code",
+              "examples/data-analysis",
+              "examples/ci-cd-pipeline",
+              "examples/collaborative-terminal"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Core",
             "pages": [
-              "api-reference/introduction"
+              "api/sandbox",
+              "api/get-sandbox",
+              "api/proxy-to-sandbox"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Command Execution",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/exec",
+              "api/exec-stream",
+              "api/exec-interactive"
+            ]
+          },
+          {
+            "group": "File Operations",
+            "pages": [
+              "api/read-file",
+              "api/write-file",
+              "api/list-files",
+              "api/mkdir",
+              "api/remove-file",
+              "api/stream-file",
+              "api/collect-file"
+            ]
+          },
+          {
+            "group": "Process Management",
+            "pages": [
+              "api/start-process",
+              "api/list-processes",
+              "api/get-process",
+              "api/kill-process",
+              "api/wait-for-exit",
+              "api/wait-for-log"
+            ]
+          },
+          {
+            "group": "Port Management",
+            "pages": [
+              "api/expose-port",
+              "api/unexpose-port",
+              "api/list-ports",
+              "api/wait-for-port"
+            ]
+          },
+          {
+            "group": "Code Interpreter",
+            "pages": [
+              "api/code-interpreter/create-context",
+              "api/code-interpreter/run-code",
+              "api/code-interpreter/run-code-stream",
+              "api/code-interpreter/list-contexts",
+              "api/code-interpreter/delete-context"
+            ]
+          },
+          {
+            "group": "Git Operations",
+            "pages": [
+              "api/git-checkout"
+            ]
+          },
+          {
+            "group": "Sessions",
+            "pages": [
+              "api/create-session",
+              "api/delete-session",
+              "api/list-sessions"
+            ]
+          },
+          {
+            "group": "Backups",
+            "pages": [
+              "api/create-backup",
+              "api/restore-backup"
+            ]
+          },
+          {
+            "group": "Utility",
+            "pages": [
+              "api/ping",
+              "api/mount-bucket"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/exec-result",
+              "api/types/process",
+              "api/types/code-context",
+              "api/types/execution",
+              "api/types/file-metadata",
+              "api/types/sandbox-options"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

@@ -1,0 +1,198 @@
+---
+title: 'waitForPort'
+description: 'Wait for a port to become ready'
+---
+
+Waits for a specific port to become available and ready to accept connections. Supports both TCP and HTTP health checks.
+
+## Method Signature
+
+```typescript
+await process.waitForPort(
+  port: number,
+  options?: WaitForPortOptions
+): Promise<void>
+```
+
+<Note>
+This is a method on the `Process` object returned by `startProcess()`, not on the sandbox itself.
+</Note>
+
+## Parameters
+
+<ParamField path="port" type="number" required>
+  Port number to check (1024-65535)
+</ParamField>
+
+<ParamField path="options" type="WaitForPortOptions">
+  Configuration options for port checking
+
+  <Expandable title="WaitForPortOptions">
+    <ParamField path="mode" type="'http' | 'tcp'" default="http">
+      Check mode:
+      - `http`: Make an HTTP request and check for success status
+      - `tcp`: Just check if TCP connection succeeds
+    </ParamField>
+
+    <ParamField path="path" type="string" default="/">
+      HTTP path to check (only used when mode is `http`)
+    </ParamField>
+
+    <ParamField path="status" type="number | object" default="200-399 range">
+      Expected HTTP status code or range (only used when mode is `http`):
+      - Single number: exact match (e.g., 200)
+      - Object with min/max: range match (e.g., `{'{'}min: 200, max: 399{'}'}` )
+    </ParamField>
+
+    <ParamField path="timeout" type="number">
+      Maximum time to wait in milliseconds. If not specified, waits indefinitely.
+    </ParamField>
+
+    <ParamField path="interval" type="number" default={500}>
+      Interval between checks in milliseconds
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="void" type="void">
+  Returns nothing on success. Throws an error if the port doesn't become ready within the timeout.
+</ResponseField>
+
+## Examples
+
+### Wait for HTTP server
+
+```typescript
+const process = await sandbox.startProcess('npm run dev');
+
+await process.waitForPort(3000);
+console.log('Server is ready!');
+```
+
+### Wait for specific health endpoint
+
+```typescript
+const process = await sandbox.startProcess('python -m flask run');
+
+await process.waitForPort(5000, {
+  path: '/health',
+  status: 200
+});
+
+console.log('Flask app is healthy');
+```
+
+### TCP-only check
+
+```typescript
+const process = await sandbox.startProcess('redis-server');
+
+await process.waitForPort(6379, {
+  mode: 'tcp'
+});
+
+console.log('Redis is accepting connections');
+```
+
+### Wait with timeout
+
+```typescript
+const process = await sandbox.startProcess('node server.js');
+
+try {
+  await process.waitForPort(8080, {
+    timeout: 30000 // 30 seconds
+  });
+  console.log('Server started successfully');
+} catch (error) {
+  console.error('Server did not start within 30 seconds');
+}
+```
+
+### Custom status range
+
+```typescript
+const process = await sandbox.startProcess('./api-server');
+
+await process.waitForPort(8080, {
+  path: '/api/status',
+  status: { min: 200, max: 299 } // Only accept 2xx responses
+});
+
+console.log('API server is ready');
+```
+
+### Wait then expose port
+
+```typescript
+const process = await sandbox.startProcess('python -m http.server 8080');
+
+// Wait for port to be ready
+await process.waitForPort(8080);
+
+// Now expose it
+const { url } = await sandbox.exposePort(8080, {
+  hostname: 'example.com'
+});
+
+console.log('Server ready at:', url);
+```
+
+### Check multiple services
+
+```typescript
+// Start multiple services
+const web = await sandbox.startProcess('npm run web');
+const api = await sandbox.startProcess('npm run api');
+const db = await sandbox.startProcess('npm run db');
+
+// Wait for all to be ready
+await Promise.all([
+  web.waitForPort(3000),
+  api.waitForPort(8080),
+  db.waitForPort(5432, { mode: 'tcp' })
+]);
+
+console.log('All services ready!');
+```
+
+## Error Handling
+
+Throws `ProcessReadyTimeoutError` if the port doesn't become ready within the timeout.
+
+```typescript
+import { ProcessReadyTimeoutError } from '@cloudflare/sandbox';
+
+try {
+  await process.waitForPort(8080, { timeout: 10000 });
+} catch (error) {
+  if (error instanceof ProcessReadyTimeoutError) {
+    console.log('Port did not become ready within timeout');
+    const logs = await process.getLogs();
+    console.log('Process output:', logs.stdout);
+  }
+}
+```
+
+Throws `ProcessExitedBeforeReadyError` if the process exits before the port becomes ready.
+
+```typescript
+import { ProcessExitedBeforeReadyError } from '@cloudflare/sandbox';
+
+try {
+  await process.waitForPort(3000);
+} catch (error) {
+  if (error instanceof ProcessExitedBeforeReadyError) {
+    console.log('Process exited before port became ready');
+    console.log('Exit code:', error.context.exitCode);
+  }
+}
+```
+
+## Related Methods
+
+- [startProcess](/api/start-process) - Start a background process
+- [waitForLog](/api/wait-for-log) - Wait for log output
+- [exposePort](/api/expose-port) - Expose a port with a preview URL

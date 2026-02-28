@@ -1,0 +1,371 @@
+---
+title: CI/CD pipeline with build tools
+description: Build CI/CD pipelines that compile, test, and bundle code in isolated sandboxes
+---
+
+Create CI/CD pipelines that leverage Sandbox SDK for build tools, testing, and code compilation. This example shows how to use sandboxes to provide build environments that Workers don't include by default.
+
+## Overview
+
+Workers are designed for instant JavaScript and WebAssembly execution, but don't include build tools like:
+
+- **npm**: Package installation
+- **Bundlers**: esbuild, webpack, rollup
+- **Compilers**: TypeScript, Rust, Go
+- **Test frameworks**: Full test suites
+
+Sandbox SDK provides these tools in isolated containers, enabling complete CI/CD workflows.
+
+## The pattern
+
+<Steps>
+  <Step title="Build once in sandbox">
+    Run npm install, bundlers, and compilers in a container
+  </Step>
+  
+  <Step title="Execute many times in Workers">
+    Load the bundled output into Workers for instant execution
+  </Step>
+  
+  <Step title="Rebuild only when needed">
+    Cache build output until source code changes
+  </Step>
+</Steps>
+
+## Implementation
+
+### TypeScript compilation pipeline
+
+Build TypeScript with npm dependencies:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const { code, dependencies } = await request.json<{
+      code?: string;
+      dependencies?: Record<string, string>;
+    }>();
+
+    if (!code) {
+      return Response.json({ error: 'Missing code field' }, { status: 400 });
+    }
+
+    const sandbox = getSandbox(env.Sandbox, 'build-pipeline');
+
+    // Create package.json with dependencies
+    const packageJson = {
+      name: 'user-code',
+      version: '1.0.0',
+      dependencies: dependencies || {}
+    };
+
+    await sandbox.writeFile(
+      '/workspace/package.json',
+      JSON.stringify(packageJson, null, 2)
+    );
+
+    // Write user's TypeScript code
+    await sandbox.writeFile('/workspace/index.ts', code);
+
+    // Install dependencies
+    const installResult = await sandbox.exec('npm install', {
+      cwd: '/workspace'
+    });
+
+    if (!installResult.success) {
+      return Response.json({
+        error: 'npm install failed',
+        stderr: installResult.stderr
+      }, { status: 500 });
+    }
+
+    // Bundle with esbuild
+    const bundleResult = await sandbox.exec(
+      'npx esbuild index.ts --bundle --format=esm --outfile=bundle.js',
+      { cwd: '/workspace' }
+    );
+
+    if (!bundleResult.success) {
+      return Response.json({
+        error: 'Build failed',
+        stderr: bundleResult.stderr
+      }, { status: 500 });
+    }
+
+    // Read the bundled output
+    const bundle = await sandbox.readFile('/workspace/bundle.js');
+
+    return Response.json({
+      success: true,
+      bundle: bundle.content
+    });
+  }
+};
+```
+
+### Test execution pipeline
+
+Run tests in isolated environments:
+
+```typescript
+async function runTests(
+  sandbox: ReturnType<typeof getSandbox>,
+  testCode: string,
+  sourceCode: string
+): Promise<{ success: boolean; output: string }> {
+  // Write source and test files
+  await sandbox.writeFile('/workspace/src/index.ts', sourceCode);
+  await sandbox.writeFile('/workspace/tests/index.test.ts', testCode);
+
+  // Create package.json with test dependencies
+  await sandbox.writeFile(
+    '/workspace/package.json',
+    JSON.stringify({
+      name: 'test-suite',
+      scripts: {
+        test: 'vitest run'
+      },
+      devDependencies: {
+        vitest: '^1.0.0',
+        '@types/node': '^20.0.0'
+      }
+    }, null, 2)
+  );
+
+  // Install dependencies
+  await sandbox.exec('npm install', { cwd: '/workspace' });
+
+  // Run tests
+  const testResult = await sandbox.exec('npm test', { cwd: '/workspace' });
+
+  return {
+    success: testResult.success,
+    output: testResult.success ? testResult.stdout : testResult.stderr
+  };
+}
+```
+
+### Multi-stage build pipeline
+
+Implement a complete CI/CD workflow:
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const { repository, branch } = await request.json<{
+      repository?: string;
+      branch?: string;
+    }>();
+
+    if (!repository) {
+      return Response.json({ error: 'Missing repository' }, { status: 400 });
+    }
+
+    const sandbox = getSandbox(
+      env.Sandbox,
+      crypto.randomUUID().slice(0, 8)
+    );
+
+    const results = {
+      clone: { success: false, output: '' },
+      install: { success: false, output: '' },
+      test: { success: false, output: '' },
+      build: { success: false, output: '' }
+    };
+
+    try {
+      // Stage 1: Clone repository
+      await sandbox.gitCheckout(repository, {
+        targetDir: 'repo',
+        branch: branch || 'main'
+      });
+      results.clone = { success: true, output: 'Repository cloned' };
+
+      // Stage 2: Install dependencies
+      const installResult = await sandbox.exec('npm install', {
+        cwd: '/workspace/repo'
+      });
+      results.install = {
+        success: installResult.success,
+        output: installResult.success ? installResult.stdout : installResult.stderr
+      };
+
+      if (!installResult.success) {
+        return Response.json({ results }, { status: 500 });
+      }
+
+      // Stage 3: Run tests
+      const testResult = await sandbox.exec('npm test', {
+        cwd: '/workspace/repo'
+      });
+      results.test = {
+        success: testResult.success,
+        output: testResult.success ? testResult.stdout : testResult.stderr
+      };
+
+      if (!testResult.success) {
+        return Response.json({ results }, { status: 500 });
+      }
+
+      // Stage 4: Build
+      const buildResult = await sandbox.exec('npm run build', {
+        cwd: '/workspace/repo'
+      });
+      results.build = {
+        success: buildResult.success,
+        output: buildResult.success ? buildResult.stdout : buildResult.stderr
+      };
+
+      return Response.json({ results });
+    } catch (error) {
+      return Response.json({
+        results,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      }, { status: 500 });
+    }
+  }
+};
+```
+
+### Dynamic Worker execution
+
+Combine sandbox builds with Dynamic Workers:
+
+```typescript
+import { WorkerEntrypoint } from 'cloudflare:workers';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Build endpoint: compile user code
+    if (url.pathname === '/build' && request.method === 'POST') {
+      const { code } = await request.json<{ code?: string }>();
+
+      if (!code) {
+        return Response.json({ error: 'Missing code' }, { status: 400 });
+      }
+
+      const sandbox = getSandbox(env.Sandbox, 'builder');
+
+      // Write and bundle code
+      await sandbox.writeFile('/workspace/index.ts', code);
+      const bundleResult = await sandbox.exec(
+        'npx esbuild index.ts --bundle --format=esm --outfile=bundle.js',
+        { cwd: '/workspace' }
+      );
+
+      if (!bundleResult.success) {
+        return Response.json({
+          error: 'Build failed',
+          stderr: bundleResult.stderr
+        }, { status: 500 });
+      }
+
+      const bundle = await sandbox.readFile('/workspace/bundle.js');
+
+      // Store bundle in KV or R2 for later execution
+      const bundleId = crypto.randomUUID();
+      await env.BUNDLES.put(bundleId, bundle.content);
+
+      return Response.json({ bundleId });
+    }
+
+    // Execute endpoint: run compiled code in Dynamic Worker
+    if (url.pathname.startsWith('/execute/')) {
+      const bundleId = url.pathname.split('/')[2];
+      const bundle = await env.BUNDLES.get(bundleId);
+
+      if (!bundle) {
+        return Response.json({ error: 'Bundle not found' }, { status: 404 });
+      }
+
+      // Load and execute the bundle in a Dynamic Worker
+      const worker = await env.DYNAMIC_WORKER.get(bundleId);
+      return worker.fetch(request);
+    }
+
+    return new Response('Not Found', { status: 404 });
+  }
+};
+```
+
+## Example usage
+
+### Build TypeScript code
+
+```bash
+curl -X POST http://localhost:8787/build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "import { z } from \"zod\";\nexport const schema = z.object({ name: z.string() });",
+    "dependencies": { "zod": "^3.22.0" }
+  }'
+```
+
+### Run CI/CD pipeline
+
+```bash
+curl -X POST http://localhost:8787/pipeline \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repository": "https://github.com/user/repo",
+    "branch": "main"
+  }'
+```
+
+### Execute tests
+
+```bash
+curl -X POST http://localhost:8787/test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "testCode": "import { expect, test } from \"vitest\";\ntest(\"adds 1 + 2\", () => { expect(1 + 2).toBe(3); });"
+  }'
+```
+
+## Use cases
+
+- **Code Playgrounds**: Interactive coding environments with instant compilation
+- **Validation Services**: Validate user-submitted code before deployment
+- **Build Services**: On-demand building and bundling
+- **Test Runners**: Execute test suites in isolated environments
+- **Code Transformation**: Transpile, minify, and optimize code
+
+## Best practices
+
+<Tip>
+  Cache build outputs to avoid rebuilding unchanged code. Use content hashing to detect changes.
+</Tip>
+
+<Tip>
+  Set appropriate timeouts for build steps. Complex builds may take longer than simple compilation.
+</Tip>
+
+<Tip>
+  Use separate sandboxes for different build jobs to avoid conflicts and ensure isolation.
+</Tip>
+
+## Combining with Dynamic Workers
+
+The real power comes from combining sandbox builds with Dynamic Workers:
+
+1. **Sandbox SDK**: Provides build tools (npm, esbuild, etc.)
+2. **Dynamic Workers**: Execute the bundled output instantly
+3. **Result**: User code with npm dependencies running in Workers
+
+This pattern enables:
+
+- Interactive code playgrounds
+- User-submitted Workers
+- Custom validation logic
+- Serverless functions as a service
+
+## Related resources
+
+- [TypeScript Validator example](https://github.com/cloudflare/sandbox-sdk/tree/main/examples/typescript-validator)
+- [Dynamic Workers documentation](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/)
+- [Command execution guide](/guides/executing-commands)
+- [Git integration guide](/guides/git-integration)

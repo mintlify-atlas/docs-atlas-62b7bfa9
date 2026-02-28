@@ -1,0 +1,212 @@
+---
+title: AI code execution with Workers AI
+description: Give AI models the ability to execute Python code using the Sandbox SDK
+---
+
+Build an AI-powered code interpreter that gives language models the ability to execute Python code in isolated sandboxes. This example integrates Workers AI with the Sandbox SDK to create a secure code execution environment.
+
+## Overview
+
+This example demonstrates:
+
+- Integrating Workers AI models with the Sandbox SDK
+- Using the Vercel AI SDK for clean function calling
+- Executing Python code in isolated containers
+- Handling code execution results and errors
+
+## How it works
+
+<Steps>
+  <Step title="User sends a prompt">
+    The user sends a natural language prompt to the `/run` endpoint requesting a calculation or code execution.
+  </Step>
+  
+  <Step title="Model receives the prompt">
+    The GPT-OSS model receives the prompt along with an `execute_python` tool definition.
+  </Step>
+  
+  <Step title="Model decides to execute code">
+    The model determines whether Python execution is needed and generates the appropriate code.
+  </Step>
+  
+  <Step title="Code runs in sandbox">
+    The Python code executes in an isolated Cloudflare Sandbox container.
+  </Step>
+  
+  <Step title="Results returned to model">
+    Execution results are sent back to the model for generating the final response.
+  </Step>
+</Steps>
+
+## Implementation
+
+### Create the Python execution function
+
+This function handles code execution in the sandbox and extracts results:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+async function executePythonCode(env: Env, code: string): Promise<string> {
+  const sandboxId = env.Sandbox.idFromName('default');
+  const sandbox = getSandbox(env.Sandbox, sandboxId.toString().slice(0, 63));
+  const pythonCtx = await sandbox.createCodeContext({ language: 'python' });
+  const result = await sandbox.runCode(code, {
+    context: pythonCtx
+  });
+
+  // Extract output from results (expressions)
+  if (result.results?.length) {
+    const outputs = result.results
+      .map((r) => r.text || r.html || JSON.stringify(r))
+      .filter(Boolean);
+    if (outputs.length) return outputs.join('\n');
+  }
+
+  // Extract output from logs
+  let output = '';
+  if (result.logs?.stdout?.length) {
+    output = result.logs.stdout.join('\n');
+  }
+  if (result.logs?.stderr?.length) {
+    if (output) output += '\n';
+    output += `Error: ${result.logs.stderr.join('\n')}`;
+  }
+
+  return result.error
+    ? `Error: ${result.error}`
+    : output || 'Code executed successfully';
+}
+```
+
+### Set up the AI request handler
+
+Integrate Workers AI with the Vercel AI SDK:
+
+```typescript
+import { generateText, stepCountIs, tool } from 'ai';
+import { createWorkersAI } from 'workers-ai-provider';
+import { z } from 'zod';
+
+async function handleAIRequest(input: string, env: Env): Promise<string> {
+  const workersai = createWorkersAI({ binding: env.AI });
+
+  const result = await generateText({
+    model: workersai('@cf/openai/gpt-oss-120b'),
+    messages: [{ role: 'user', content: input }],
+    tools: {
+      execute_python: tool({
+        description: 'Execute Python code and return the output',
+        inputSchema: z.object({
+          code: z.string().describe('The Python code to execute')
+        }),
+        execute: async ({ code }) => {
+          return executePythonCode(env, code);
+        }
+      })
+    },
+    stopWhen: stepCountIs(5)
+  });
+
+  return result.text || 'No response generated';
+}
+```
+
+### Create the Worker endpoint
+
+Set up the API endpoint to handle requests:
+
+```typescript
+export { Sandbox } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname !== '/run' || request.method !== 'POST') {
+      return new Response('Not Found', { status: 404 });
+    }
+
+    try {
+      const { input } = await request.json<{ input?: string }>();
+
+      if (!input) {
+        return Response.json({ error: 'Missing input field' }, { status: 400 });
+      }
+
+      const output = await handleAIRequest(input, env);
+      return Response.json({ output });
+    } catch (error) {
+      console.error('Request failed:', error);
+      const message =
+        error instanceof Error ? error.message : 'Internal Server Error';
+      return Response.json({ error: message }, { status: 500 });
+    }
+  }
+} satisfies ExportedHandler<Env>;
+```
+
+## Example usage
+
+Test the code interpreter with various prompts:
+
+```bash
+# Simple calculation
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Calculate 5 factorial using Python"}'
+
+# Execute specific code
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Execute this Python: print(sum(range(1, 101)))"}'
+
+# Complex operations
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Use Python to find all prime numbers under 20"}'
+```
+
+## Setup and deployment
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    npm install @cloudflare/sandbox ai workers-ai-provider zod
+    ```
+  </Step>
+  
+  <Step title="Run locally">
+    ```bash
+    npm run dev
+    ```
+    
+    <Note>
+      The first run builds the Docker container (2-3 minutes). Subsequent runs are much faster.
+    </Note>
+  </Step>
+  
+  <Step title="Deploy to production">
+    ```bash
+    npx wrangler deploy
+    ```
+    
+    <Note>
+      After first deployment, wait 2-3 minutes for container provisioning before making requests.
+    </Note>
+  </Step>
+</Steps>
+
+## Key features
+
+- **Workers AI Integration**: Uses the `@cf/openai/gpt-oss-120b` model via the workers-ai-provider package
+- **Vercel AI SDK**: Leverages `generateText()` and `tool()` for clean function calling patterns
+- **Sandbox Execution**: Python code runs in isolated Cloudflare Sandbox containers
+- **Result Handling**: Extracts outputs from both expression results and stdout/stderr logs
+- **Error Handling**: Properly surfaces execution errors to the AI model
+
+## Related resources
+
+- [Code Interpreter API reference](/api/code-interpreter/run-code)
+- [Workers AI documentation](https://developers.cloudflare.com/workers-ai/)
+- [Vercel AI SDK](https://sdk.vercel.ai/docs)

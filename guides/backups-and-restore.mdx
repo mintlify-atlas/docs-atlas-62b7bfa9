@@ -1,0 +1,445 @@
+---
+title: Backups and restore
+description: Create snapshots of sandbox filesystems and restore them to preserve state across sandbox lifecycles.
+---
+
+Backup and restore functionality lets you save the state of a sandbox filesystem and restore it later. Perfect for checkpointing work, template creation, disaster recovery, and state persistence.
+
+<Warning>
+Backups are an **optional advanced feature**. Most applications don't need backups - sandboxes are ephemeral by design. Only use backups when you need to preserve state across sandbox restarts or share filesystem snapshots between sandboxes.
+</Warning>
+
+## Prerequisites
+
+Backups require configuration before use:
+
+1. **R2 bucket** - Create a Cloudflare R2 bucket for storage
+2. **R2 API credentials** - Generate R2 access keys
+3. **Environment variables** - Configure your Worker with:
+   - `BACKUP_BUCKET` - R2 bucket binding
+   - `BACKUP_BUCKET_NAME` - Bucket name
+   - `R2_ACCESS_KEY_ID` - R2 access key
+   - `R2_SECRET_ACCESS_KEY` - R2 secret key
+   - `CLOUDFLARE_ACCOUNT_ID` - Your account ID
+
+See [R2 setup guide](https://developers.cloudflare.com/r2/get-started/) for details.
+
+## Creating backups
+
+Create a compressed snapshot of a directory:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Create backup of workspace
+const backup = await sandbox.createBackup('/workspace', {
+  description: 'Project checkpoint before refactoring'
+});
+
+console.log('Backup created:', backup.id);
+console.log('Size:', backup.sizeBytes, 'bytes');
+console.log('Created:', backup.createdAt);
+```
+
+<Note>
+Backups use squashfs compression for efficient storage. A typical workspace of 100MB might compress to 20-30MB.
+</Note>
+
+## Backup metadata
+
+Every backup includes metadata:
+
+```typescript
+interface DirectoryBackup {
+  id: string;              // Unique backup identifier
+  sandboxId: string;       // Sandbox that created backup
+  dir: string;             // Directory that was backed up
+  sizeBytes: number;       // Compressed archive size
+  createdAt: Date;         // When backup was created
+  expiresAt: Date;         // When backup expires (7 days default)
+  description?: string;    // Optional description
+  metadata?: Record<string, string>; // Custom metadata
+}
+```
+
+## Restoring backups
+
+Restore a backup to recreate the filesystem state:
+
+```typescript
+// Restore to original location
+const result = await sandbox.restoreBackup(backup.id);
+
+console.log('Restored to:', result.dir);
+console.log('Files restored:', result.filesRestored);
+```
+
+### Restore to different location
+
+```typescript
+// Restore to a different directory
+const result = await sandbox.restoreBackup(backup.id, {
+  targetDir: '/workspace/restored-backup'
+});
+```
+
+### Restore in different sandbox
+
+```typescript
+// Create backup in one sandbox
+const sandbox1 = getSandbox(env.Sandbox, 'sandbox-1');
+const backup = await sandbox1.createBackup('/workspace');
+
+// Restore in another sandbox
+const sandbox2 = getSandbox(env.Sandbox, 'sandbox-2');
+await sandbox2.restoreBackup(backup.id);
+```
+
+<Note>
+Backups are stored in R2, so they can be restored to any sandbox with access to the same R2 bucket.
+</Note>
+
+## Custom metadata
+
+Add custom metadata to backups:
+
+```typescript
+const backup = await sandbox.createBackup('/workspace', {
+  description: 'After implementing feature X',
+  metadata: {
+    version: '1.2.0',
+    branch: 'feature/new-api',
+    commit: 'abc123',
+    author: 'alice@example.com'
+  }
+});
+
+// Access metadata later
+console.log('Backup version:', backup.metadata?.version);
+console.log('From branch:', backup.metadata?.branch);
+```
+
+## Common patterns
+
+### Project checkpoints
+
+```typescript
+// Checkpoint before major changes
+const checkpoint = await sandbox.createBackup('/workspace', {
+  description: 'Before refactoring database layer',
+  metadata: {
+    type: 'checkpoint',
+    timestamp: new Date().toISOString()
+  }
+});
+
+// Make changes...
+await sandbox.exec('npm run refactor');
+
+// Test changes
+const test = await sandbox.exec('npm test');
+
+if (!test.success) {
+  // Rollback to checkpoint
+  console.log('Tests failed, rolling back...');
+  await sandbox.restoreBackup(checkpoint.id);
+}
+```
+
+### Template creation
+
+```typescript
+// Set up a project template
+await sandbox.exec('npm create vite@latest my-app -- --template react-ts');
+await sandbox.exec('npm install', { cwd: '/workspace/my-app' });
+
+// Create template backup
+const template = await sandbox.createBackup('/workspace/my-app', {
+  description: 'React + TypeScript template with dependencies',
+  metadata: {
+    type: 'template',
+    framework: 'react',
+    language: 'typescript'
+  }
+});
+
+// Later, instantiate template in new sandbox
+const newSandbox = getSandbox(env.Sandbox, 'new-project');
+await newSandbox.restoreBackup(template.id);
+
+console.log('New project ready from template!');
+```
+
+### Development snapshots
+
+```typescript
+// Take snapshot before each development session
+const sessionStart = await sandbox.createBackup('/workspace', {
+  description: `Session start ${new Date().toISOString()}`,
+  metadata: {
+    type: 'session',
+    session_id: crypto.randomUUID()
+  }
+});
+
+// Work on code...
+
+// Take snapshot at end of session
+const sessionEnd = await sandbox.createBackup('/workspace', {
+  description: `Session end ${new Date().toISOString()}`,
+  metadata: {
+    type: 'session',
+    session_id: sessionStart.metadata?.session_id,
+    status: 'completed'
+  }
+});
+```
+
+### Testing multiple scenarios
+
+```typescript
+// Create baseline state
+await sandbox.exec('npm run seed-database');
+const baseline = await sandbox.createBackup('/workspace/data');
+
+// Test scenario A
+await sandbox.exec('npm run test:scenario-a');
+const resultsA = await getTestResults();
+
+// Restore baseline
+await sandbox.restoreBackup(baseline.id);
+
+// Test scenario B
+await sandbox.exec('npm run test:scenario-b');
+const resultsB = await getTestResults();
+
+return Response.json({
+  scenarioA: resultsA,
+  scenarioB: resultsB
+});
+```
+
+### Backup before destructive operations
+
+```typescript
+// Backup before potentially destructive operation
+const backup = await sandbox.createBackup('/workspace');
+
+try {
+  // Risky operation
+  await sandbox.exec('rm -rf /workspace/node_modules');
+  await sandbox.exec('npm install --legacy-peer-deps');
+  
+  const build = await sandbox.exec('npm run build');
+  
+  if (!build.success) {
+    throw new Error('Build failed after dependency changes');
+  }
+  
+  console.log('Operation successful, backup no longer needed');
+} catch (error) {
+  // Restore from backup on failure
+  console.error('Operation failed, restoring backup...');
+  await sandbox.restoreBackup(backup.id);
+  throw error;
+}
+```
+
+## Backup expiration
+
+Backups expire after 7 days by default:
+
+```typescript
+const backup = await sandbox.createBackup('/workspace');
+
+console.log('Expires:', backup.expiresAt);
+// Expires: 2024-02-07T10:00:00Z (7 days from now)
+```
+
+<Warning>
+Expired backups are automatically deleted from R2. Store important backups externally if you need longer retention.
+</Warning>
+
+## Storage considerations
+
+### Backup size
+
+Backups create compressed archives. Typical compression ratios:
+
+- **Source code**: 60-80% compression (10MB → 2-4MB)
+- **Dependencies (node_modules)**: 40-60% compression (200MB → 80-120MB)
+- **Binary files**: 10-20% compression (100MB → 80-90MB)
+
+### What to backup
+
+Backup only what you need:
+
+```typescript
+// Good - backup source and config only
+await sandbox.createBackup('/workspace/src');
+await sandbox.createBackup('/workspace/config');
+
+// Avoid - backing up dependencies wastes space
+await sandbox.createBackup('/workspace');  // Includes node_modules
+```
+
+### Clean before backup
+
+```typescript
+// Remove build artifacts and dependencies
+await sandbox.exec('rm -rf /workspace/node_modules');
+await sandbox.exec('rm -rf /workspace/dist');
+
+// Backup clean source
+const backup = await sandbox.createBackup('/workspace');
+
+// Restore and rebuild
+await sandbox.restoreBackup(backup.id);
+await sandbox.exec('npm install');
+await sandbox.exec('npm run build');
+```
+
+## Error handling
+
+### Handle backup failures
+
+```typescript
+try {
+  const backup = await sandbox.createBackup('/workspace');
+} catch (error) {
+  if (error.message.includes('directory not found')) {
+    console.error('Directory does not exist');
+  } else if (error.message.includes('R2')) {
+    console.error('R2 upload failed:', error.message);
+  } else {
+    console.error('Backup failed:', error.message);
+  }
+}
+```
+
+### Handle restore failures
+
+```typescript
+try {
+  await sandbox.restoreBackup(backupId);
+} catch (error) {
+  if (error.message.includes('not found')) {
+    console.error('Backup does not exist or has expired');
+  } else if (error.message.includes('target directory exists')) {
+    console.error('Target directory must be empty');
+  } else {
+    console.error('Restore failed:', error.message);
+  }
+}
+```
+
+## Backup vs. Git
+
+Backups and Git serve different purposes:
+
+| Feature | Backups | Git |
+|---------|---------|-----|
+| **Speed** | Fast snapshots | Requires commits, pushes |
+| **What's saved** | Entire filesystem state | Only tracked files |
+| **Dependencies** | Includes node_modules, etc. | Usually ignored |
+| **History** | Single snapshots | Full version history |
+| **Sharing** | Via R2 bucket | Via remote repository |
+| **Best for** | Quick state preservation | Version control, collaboration |
+
+Use backups for:
+- Quick state snapshots
+- Including dependencies and build artifacts
+- Temporary state preservation
+- Testing and rollback scenarios
+
+Use Git for:
+- Version history
+- Code collaboration
+- Long-term storage
+- Selective file tracking
+
+## Best practices
+
+<Steps>
+
+### Backup selectively
+
+Only backup what you need. Exclude dependencies and build artifacts:
+
+```typescript
+// Clean first
+await sandbox.exec('npm run clean');
+
+// Backup source only
+await sandbox.createBackup('/workspace/src');
+```
+
+### Add descriptive metadata
+
+Include context to identify backups later:
+
+```typescript
+await sandbox.createBackup('/workspace', {
+  description: 'Feature X implementation complete',
+  metadata: {
+    feature: 'user-authentication',
+    version: '1.2.0',
+    tests_passing: 'true'
+  }
+});
+```
+
+### Handle expiration
+
+Backups expire after 7 days. For longer retention, download and store externally:
+
+```typescript
+const backup = await sandbox.createBackup('/workspace');
+
+// Store backup ID for later use
+await env.KV.put(`backup:project-x`, backup.id, {
+  expirationTtl: 604800  // 7 days
+});
+```
+
+### Test restores
+
+Periodically test that backups can be restored:
+
+```typescript
+// Create backup
+const backup = await sandbox.createBackup('/workspace');
+
+// Verify it's restorable
+const testSandbox = getSandbox(env.Sandbox, 'backup-test');
+try {
+  await testSandbox.restoreBackup(backup.id);
+  console.log('Backup verified');
+} finally {
+  await testSandbox.destroy();
+}
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Managing files" icon="folder" href="/guides/managing-files">
+  Work with filesystem before backing up
+</Card>
+
+<Card title="Git integration" icon="git" href="/guides/git-integration">
+  Use Git for version control alongside backups
+</Card>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Backup application state between runs
+</Card>
+
+<Card title="R2 docs" icon="database" href="https://developers.cloudflare.com/r2/">
+  Learn more about Cloudflare R2 storage
+</Card>
+
+</CardGroup>

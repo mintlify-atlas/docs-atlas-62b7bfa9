@@ -1,0 +1,400 @@
+---
+title: Processes
+description: Managing long-running background processes with lifecycle control
+---
+
+## Overview
+
+Background processes allow you to run long-running commands while continuing to execute other operations. Unlike foreground commands via `exec()`, processes:
+
+- Stream output in real-time
+- Can be killed on demand
+- Don't block other operations
+- Have unique IDs for tracking
+- Support lifecycle events
+
+## Starting processes
+
+Use `startProcess()` to run commands in the background:
+
+```typescript
+const process = await sandbox.startProcess('python server.py --port 8000', {
+  processId: 'web-server',
+  onOutput: (stream, data) => {
+    console.log(`[${stream}]`, data);
+  },
+  onExit: (code) => {
+    console.log('Server exited:', code);
+  }
+});
+
+console.log('Process started:', process.id, process.pid);
+```
+
+### Process options
+
+Configure process behavior:
+
+```typescript
+const process = await sandbox.startProcess('npm run dev', {
+  // Custom ID (auto-generated if omitted)
+  processId: 'dev-server',
+  
+  // Working directory
+  cwd: '/workspace/app',
+  
+  // Environment variables
+  env: {
+    NODE_ENV: 'development',
+    PORT: '3000'
+  },
+  
+  // Execution timeout (process killed after timeout)
+  timeout: 300000, // 5 minutes
+  
+  // Auto-cleanup completed process records
+  autoCleanup: true,
+  
+  // Callbacks
+  onStart: (proc) => console.log('Started:', proc.id),
+  onOutput: (stream, data) => console.log(data),
+  onExit: (code) => console.log('Exit:', code),
+  onError: (error) => console.error('Error:', error)
+});
+```
+
+## Process object
+
+The returned `Process` object provides lifecycle control:
+
+```typescript
+interface Process {
+  readonly id: string;              // Unique process ID
+  readonly pid?: number;            // System process ID
+  readonly command: string;         // Command executed
+  readonly status: ProcessStatus;   // Current status
+  readonly startTime: Date;         // When started
+  readonly endTime?: Date;          // When ended (if completed)
+  readonly exitCode?: number;       // Exit code (if completed)
+  readonly sessionId?: string;      // Session ID
+  
+  // Control methods
+  kill(signal?: string): Promise<void>;
+  getStatus(): Promise<ProcessStatus>;
+  getLogs(): Promise<{stdout: string; stderr: string}>;
+  
+  // Wait methods
+  waitForLog(pattern: string | RegExp, timeout?: number): Promise<WaitForLogResult>;
+  waitForPort(port: number, options?: WaitForPortOptions): Promise<void>;
+  waitForExit(timeout?: number): Promise<WaitForExitResult>;
+}
+```
+
+## Process status
+
+Processes progress through several states:
+
+```typescript
+type ProcessStatus =
+  | 'starting'   // Being initialized
+  | 'running'    // Actively running
+  | 'completed'  // Exited with code 0
+  | 'failed'     // Exited with non-zero code
+  | 'killed'     // Terminated by signal
+  | 'error';     // Failed to start
+```
+
+Check status at any time:
+
+```typescript
+const status = await process.getStatus();
+console.log('Current status:', status);
+```
+
+## Killing processes
+
+Terminate running processes:
+
+```typescript
+// Graceful shutdown (SIGTERM)
+await process.kill();
+
+// Force kill (SIGKILL)
+await process.kill('SIGKILL');
+
+// Custom signal
+await process.kill('SIGINT');
+```
+
+<Warning>
+Child processes spawned by your command may not be automatically killed. Only the direct process receives the signal.
+</Warning>
+
+## Process logs
+
+Retrieve accumulated output:
+
+```typescript
+const logs = await process.getLogs();
+console.log('stdout:', logs.stdout);
+console.log('stderr:', logs.stderr);
+```
+
+Or stream logs in real-time:
+
+```typescript
+const stream = await sandbox.streamProcessLogs(process.id);
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    console.log('OUT:', event.data);
+  } else if (event.type === 'stderr') {
+    console.error('ERR:', event.data);
+  }
+}
+```
+
+## Waiting for readiness
+
+### Wait for log pattern
+
+Wait for specific output before proceeding:
+
+```typescript
+const process = await sandbox.startProcess('python train.py');
+
+// Wait for string
+const result = await process.waitForLog('Training started');
+console.log('Found line:', result.line);
+
+// Wait for regex pattern
+const result = await process.waitForLog(/Epoch (\d+) complete/, 30000);
+console.log('Epoch:', result.match[1]);
+```
+
+### Wait for port
+
+Wait for a server to be ready:
+
+```typescript
+const process = await sandbox.startProcess('npm start');
+
+// Wait for HTTP endpoint (default: GET / expecting 200-399)
+await process.waitForPort(3000);
+
+// Custom health check
+await process.waitForPort(3000, {
+  path: '/health',
+  status: 200,
+  timeout: 60000,  // 1 minute
+  interval: 1000   // Check every second
+});
+
+// TCP-only check (just verify port is accepting connections)
+await process.waitForPort(5432, {
+  mode: 'tcp'
+});
+```
+
+#### Port check options
+
+```typescript
+interface WaitForPortOptions {
+  mode?: 'http' | 'tcp';              // Check mode (default: 'http')
+  path?: string;                      // HTTP path (default: '/')
+  status?: number | {min: number; max: number}; // Expected status
+  timeout?: number;                   // Max wait time in ms
+  interval?: number;                  // Check interval (default: 500ms)
+}
+```
+
+### Wait for exit
+
+Wait for process completion:
+
+```typescript
+const process = await sandbox.startProcess('python batch-job.py');
+
+// Wait indefinitely
+const result = await process.waitForExit();
+console.log('Exit code:', result.exitCode);
+
+// Wait with timeout
+try {
+  const result = await process.waitForExit(30000); // 30 seconds
+} catch (error) {
+  // Timeout - process still running
+  await process.kill();
+}
+```
+
+## Listing processes
+
+Get all processes in the sandbox:
+
+```typescript
+const processes = await sandbox.listProcesses();
+
+for (const proc of processes) {
+  console.log(`${proc.id}: ${proc.status} (${proc.command})`);
+}
+```
+
+<Note>
+Process listing is sandbox-scoped, not session-scoped. You'll see processes from all sessions.
+</Note>
+
+## Getting processes
+
+Retrieve a specific process by ID:
+
+```typescript
+const process = await sandbox.getProcess('web-server');
+
+if (process) {
+  console.log('Process found:', process.status);
+  
+  if (process.status === 'running') {
+    await process.kill();
+  }
+}
+```
+
+## Process cleanup
+
+### Auto-cleanup
+
+By default, completed processes are automatically cleaned up:
+
+```typescript
+const process = await sandbox.startProcess('echo hello', {
+  autoCleanup: true // default
+});
+
+// After process completes, record is automatically removed
+```
+
+### Manual cleanup
+
+Clean up all completed processes:
+
+```typescript
+const count = await sandbox.cleanupCompletedProcesses();
+console.log('Cleaned up', count, 'processes');
+```
+
+### Kill all
+
+Terminate all running processes:
+
+```typescript
+const count = await sandbox.killAllProcesses();
+console.log('Killed', count, 'processes');
+```
+
+## Common patterns
+
+### Start server and run tests
+
+```typescript
+// Start server
+const server = await sandbox.startProcess('npm start');
+
+try {
+  // Wait for server to be ready
+  await server.waitForPort(3000, { timeout: 30000 });
+  
+  // Run tests
+  const result = await sandbox.exec('npm test');
+  console.log('Tests:', result.success ? 'PASSED' : 'FAILED');
+} finally {
+  // Clean up
+  await server.kill();
+}
+```
+
+### Monitor long-running job
+
+```typescript
+const job = await sandbox.startProcess('python train.py', {
+  onOutput: (stream, data) => {
+    // Send progress updates to client
+    if (data.includes('Epoch')) {
+      websocket.send(JSON.stringify({ type: 'progress', data }));
+    }
+  }
+});
+
+// Wait for completion
+const result = await job.waitForExit();
+
+if (result.exitCode === 0) {
+  const output = await sandbox.readFile('/workspace/model.pkl');
+  // Save model...
+}
+```
+
+### Parallel processing
+
+```typescript
+// Start multiple workers
+const workers = await Promise.all([
+  sandbox.startProcess('python worker.py --id 1'),
+  sandbox.startProcess('python worker.py --id 2'),
+  sandbox.startProcess('python worker.py --id 3')
+]);
+
+// Wait for all to complete
+const results = await Promise.all(
+  workers.map(w => w.waitForExit())
+);
+
+console.log('All workers completed');
+```
+
+## Architecture
+
+Processes run in bash subshells with streaming:
+
+```bash
+# Process execution pattern
+(
+  cd /workspace
+  export VAR=value
+  python server.py
+) >stdout.pipe 2>stderr.pipe &
+PID=$!
+```
+
+The runtime:
+1. Spawns command in subshell (non-blocking)
+2. Captures PID for process control
+3. Streams stdout/stderr via FIFOs
+4. Monitors exit status
+5. Routes events to SDK callbacks
+
+<Info>
+State changes in background processes (cd, export) don't affect the session shell or other processes.
+</Info>
+
+## Process vs exec
+
+| Feature | `exec()` | `startProcess()` |
+|---------|----------|------------------|
+| Blocking | Yes | No |
+| State persists | Yes | No |
+| Real-time streaming | Optional | Always |
+| Can kill | No (use timeout) | Yes |
+| PID available | No | Yes |
+| Best for | Sequential commands | Servers, long jobs |
+
+## Limitations
+
+- **PID namespace**: Processes see all container processes unless using `isolation: true`
+- **Child processes**: May not be killed when parent is killed
+- **Resource limits**: All processes share container CPU/memory
+- **Exit detection**: Small delay between exit and status update
+
+<Tip>
+For critical cleanup, use process groups or wrap your command in a script that handles signals properly.
+</Tip>

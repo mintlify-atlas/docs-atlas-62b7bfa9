@@ -1,0 +1,156 @@
+---
+title: 'createSession'
+description: 'Create an isolated execution session with independent environment and state'
+---
+
+Creates a new execution session, providing an isolated environment with its own working directory, environment variables, and shell state.
+
+## Method Signature
+
+```typescript
+async createSession(
+  options?: SessionOptions
+): Promise<ExecutionSession>
+```
+
+## Parameters
+
+<ParamField path="options" type="SessionOptions" optional>
+  Session configuration options
+  
+  <Expandable title="properties">
+    <ParamField path="id" type="string" optional>
+      Optional session ID. Auto-generated if not provided.
+    </ParamField>
+    
+    <ParamField path="name" type="string" optional>
+      Session name for identification
+    </ParamField>
+    
+    <ParamField path="env" type="Record<string, string | undefined>" optional>
+      Environment variables for this session. Undefined values are skipped.
+    </ParamField>
+    
+    <ParamField path="cwd" type="string" optional>
+      Working directory for the session
+    </ParamField>
+    
+    <ParamField path="isolation" type="boolean" default={false}>
+      Enable PID namespace isolation (requires CAP_SYS_ADMIN)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ExecutionSession" type="object">
+  The created execution session with all sandbox methods bound to this session
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string" required>
+      Unique session identifier
+    </ResponseField>
+    
+    <ResponseField name="exec" type="function" required>
+      Execute commands in this session
+    </ResponseField>
+    
+    <ResponseField name="startProcess" type="function" required>
+      Start background processes in this session
+    </ResponseField>
+    
+    <ResponseField name="writeFile" type="function" required>
+      File operations in this session's context
+    </ResponseField>
+    
+    <ResponseField name="..." type="..." required>
+      All other sandbox methods, scoped to this session
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create a session with custom environment
+const session = await sandbox.createSession({
+  name: 'data-analysis',
+  env: {
+    API_KEY: 'secret-key',
+    DEBUG: 'true'
+  },
+  cwd: '/workspace/analysis'
+});
+
+// Use the session - all operations use session context
+const result = await session.exec('echo $API_KEY');
+console.log(result.stdout); // "secret-key"
+
+const files = await session.listFiles('.');
+console.log(files); // Lists /workspace/analysis
+```
+
+## Example: Multiple Isolated Sessions
+
+```typescript
+// Create sessions for different users
+const user1Session = await sandbox.createSession({
+  id: 'user-1',
+  env: { USER_ID: '1' },
+  cwd: '/workspace/user1'
+});
+
+const user2Session = await sandbox.createSession({
+  id: 'user-2',
+  env: { USER_ID: '2' },
+  cwd: '/workspace/user2'
+});
+
+// Each session has isolated state
+await user1Session.exec('export TOKEN=abc123');
+await user2Session.exec('export TOKEN=xyz789');
+
+const result1 = await user1Session.exec('echo $TOKEN');
+console.log(result1.stdout); // "abc123"
+
+const result2 = await user2Session.exec('echo $TOKEN');
+console.log(result2.stdout); // "xyz789"
+```
+
+## Example: Session with Cleanup
+
+```typescript
+const session = await sandbox.createSession({
+  name: 'temp-work',
+  cwd: '/tmp/session'
+});
+
+try {
+  // Do work in session
+  await session.exec('npm install');
+  await session.exec('npm test');
+} finally {
+  // Cleanup
+  await sandbox.deleteSession(session.id);
+}
+```
+
+## Notes
+
+- Sessions maintain independent shell state (environment variables, working directory)
+- Environment variables set in one session don't affect others
+- Each session has its own command history
+- Sessions persist until explicitly deleted or the sandbox is destroyed
+- The sandbox automatically creates a default session for non-session methods
+- Use sessions for multi-tenant scenarios or parallel workflows
+- Session operations are isolated but share the same filesystem
+
+## See Also
+
+- [deleteSession](/api/delete-session) - Delete a session
+- [listSessions](/api/list-sessions) - List all sessions (if implemented)
+- [Sessions Guide](/advanced/sessions-and-state) - Learn about session management

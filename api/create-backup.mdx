@@ -1,0 +1,172 @@
+---
+title: 'createBackup'
+description: 'Create a backup of a directory and store it in R2 for later restoration'
+---
+
+Creates a compressed backup of a directory and stores it in Cloudflare R2. The backup can be restored to any sandbox.
+
+## Method Signature
+
+```typescript
+async createBackup(
+  options: BackupOptions
+): Promise<DirectoryBackup>
+```
+
+## Parameters
+
+<ParamField path="options" type="BackupOptions" required>
+  Backup configuration options
+  
+  <Expandable title="properties">
+    <ParamField path="dir" type="string" required>
+      Directory to back up (absolute path)
+    </ParamField>
+    
+    <ParamField path="name" type="string" optional>
+      Human-readable name for this backup
+    </ParamField>
+    
+    <ParamField path="ttl" type="number" default={259200}>
+      Seconds until automatic garbage collection. Default: 259200 (3 days). No upper limit.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="DirectoryBackup" type="object">
+  Handle representing the stored backup
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string" required>
+      Unique backup identifier
+    </ResponseField>
+    
+    <ResponseField name="dir" type="string" required>
+      Directory that was backed up
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create some files
+await sandbox.writeFile('/workspace/data/output.txt', 'Results...');
+await sandbox.writeFile('/workspace/data/analysis.json', JSON.stringify(data));
+
+// Create a backup
+const backup = await sandbox.createBackup({
+  dir: '/workspace/data',
+  name: 'analysis-results',
+  ttl: 7 * 24 * 60 * 60 // 7 days
+});
+
+// Store backup handle for later restoration
+await env.KV.put('backup:latest', JSON.stringify(backup));
+console.log('Backup created:', backup.id);
+```
+
+## Example: Checkpoint Pattern
+
+```typescript
+// Save work-in-progress
+const checkpoint = await sandbox.createBackup({
+  dir: '/workspace',
+  name: 'checkpoint-before-experiment'
+});
+
+try {
+  // Try something risky
+  await sandbox.exec('rm -rf /workspace/old-data');
+  await sandbox.exec('experimental-script.sh');
+} catch (error) {
+  // Restore if it fails
+  console.log('Experiment failed, restoring checkpoint...');
+  await sandbox.restoreBackup(checkpoint);
+}
+```
+
+## Example: Periodic Backups
+
+```typescript
+// Create daily backups with cleanup
+const backup = await sandbox.createBackup({
+  dir: '/workspace/important',
+  name: `backup-${new Date().toISOString().split('T')[0]}`,
+  ttl: 30 * 24 * 60 * 60 // Keep for 30 days
+});
+
+// Store in Durable Object or KV
+await env.KV.put(
+  `backup:${backup.id}`,
+  JSON.stringify(backup),
+  { expirationTtl: 30 * 24 * 60 * 60 }
+);
+```
+
+## Configuration Requirements
+
+Backups require R2 configuration in your Worker:
+
+```toml
+# wrangler.toml
+[[r2_buckets]]
+binding = "BACKUP_BUCKET"
+bucket_name = "my-backups"
+
+[env.production]
+[env.production.vars]
+CLOUDFLARE_ACCOUNT_ID = "your-account-id"
+R2_ACCESS_KEY_ID = "your-access-key"
+R2_SECRET_ACCESS_KEY = "your-secret-key"
+BACKUP_BUCKET_NAME = "my-backups"
+```
+
+## Error Handling
+
+Throws an error if:
+- Directory does not exist
+- Insufficient disk space for compression
+- R2 upload fails
+- R2 is not configured
+- Directory is too large
+
+```typescript
+try {
+  const backup = await sandbox.createBackup({
+    dir: '/workspace/data'
+  });
+} catch (error) {
+  if (error.code === 'BACKUP_CREATE_ERROR') {
+    console.error('Failed to create backup:', error.message);
+  }
+}
+```
+
+## Technical Details
+
+- Backups use SquashFS compression for efficient storage
+- Compression happens in the container
+- Upload to R2 uses presigned URLs for direct transfer
+- Backup process is serialized to prevent concurrent operations
+- Large directories may take time to compress and upload
+
+## Notes
+
+- Backups are stored in R2 and incur storage costs
+- TTL starts when the backup is created
+- Expired backups are automatically deleted by R2
+- Backup handles are serializable - store them in KV, DO, or return to clients
+- Symlinks are preserved but their targets must be within the backed-up directory
+- File permissions and ownership are preserved
+
+## See Also
+
+- [restoreBackup](/api/restore-backup) - Restore a backup
+- [Backups Guide](/guides/backups-and-restore) - Learn about backup strategies

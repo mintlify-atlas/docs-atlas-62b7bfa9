@@ -1,0 +1,278 @@
+---
+title: OpenAI agents with shell and editor tools
+description: Build conversational AI assistants that execute commands and edit files in sandboxes
+---
+
+Create conversational AI assistants that can execute shell commands and edit files in Cloudflare Sandboxes. This example integrates the OpenAI Agents SDK with the Sandbox SDK to build interactive development environments.
+
+## Overview
+
+This example demonstrates:
+
+- Using the OpenAI Agents SDK with Cloudflare Sandboxes
+- Providing shell command execution capabilities to AI agents
+- Enabling file creation and editing through AI
+- Building conversational interfaces with persistent sessions
+
+## How it works
+
+The assistant uses two specialized tools:
+
+- **Shell tool**: Executes shell commands in the sandbox
+- **Editor tool**: Creates, updates, and deletes files in the workspace
+
+All operations are performed in isolated sandbox containers, with results tracked and returned to the user.
+
+## Implementation
+
+### Set up the sandbox and tools
+
+Create shell and editor instances for the agent:
+
+```typescript
+import { getSandbox, Sandbox } from '@cloudflare/sandbox';
+import { Editor, Shell } from '@cloudflare/sandbox/openai';
+import { Agent, applyPatchTool, run, shellTool } from '@openai/agents';
+
+export { Sandbox };
+
+// Get sandbox instance (reused for both shell and editor)
+const sandbox = getSandbox(env.Sandbox, `session-${sessionId}`);
+
+// Create shell (automatically collects results)
+const shell = new Shell(sandbox);
+
+// Create workspace editor
+const editor = new Editor(sandbox, '/workspace');
+```
+
+### Create the agent
+
+Set up the agent with both shell and editor capabilities:
+
+```typescript
+const agent = new Agent({
+  name: 'Sandbox Studio',
+  model: 'gpt-5.1',
+  instructions:
+    'You can execute shell commands and edit files in the workspace. Use shell commands to inspect the repository and the apply_patch tool to create, update, or delete files. Keep responses concise and include command output when helpful.',
+  tools: [
+    shellTool({
+      shell,
+      needsApproval: false // Auto-approve for web API
+    }),
+    applyPatchTool({
+      editor,
+      needsApproval: false // Auto-approve for web API
+    })
+  ]
+});
+```
+
+<Note>
+  This example auto-approves all AI operations. In production, implement proper approval flows and rate limiting.
+</Note>
+
+### Handle requests
+
+Process user input and return results:
+
+```typescript
+async function handleRunRequest(
+  request: Request,
+  env: Env,
+  sessionId: string
+): Promise<Response> {
+  try {
+    const body = await request.json() as { input?: string };
+    const input = body.input;
+
+    if (!input || typeof input !== 'string') {
+      return new Response(
+        JSON.stringify({ error: 'Missing or invalid input field' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const sandbox = getSandbox(env.Sandbox, `session-${sessionId}`);
+    const shell = new Shell(sandbox);
+    const editor = new Editor(sandbox, '/workspace');
+
+    const agent = new Agent({
+      name: 'Sandbox Studio',
+      model: 'gpt-5.1',
+      instructions:
+        'You can execute shell commands and edit files in the workspace.',
+      tools: [
+        shellTool({ shell, needsApproval: false }),
+        applyPatchTool({ editor, needsApproval: false })
+      ]
+    });
+
+    // Run the agent
+    const result = await run(agent, input);
+
+    // Combine and sort all results by timestamp
+    const allResults = [
+      ...shell.results.map((r) => ({ type: 'command' as const, ...r })),
+      ...editor.results.map((r) => ({ type: 'file' as const, ...r }))
+    ].sort((a, b) => a.timestamp - b.timestamp);
+
+    // Format response with combined results
+    const response = {
+      naturalResponse: result.finalOutput || null,
+      commandResults: shell.results.sort((a, b) => a.timestamp - b.timestamp),
+      fileOperations: editor.results.sort((a, b) => a.timestamp - b.timestamp)
+    };
+
+    return new Response(JSON.stringify(response), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (error: unknown) {
+    console.error('Error handling run request', error);
+    return new Response(
+      JSON.stringify({
+        error: 'Internal server error',
+        naturalResponse: 'An error occurred while processing your request.',
+        commandResults: [],
+        fileOperations: []
+      }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+```
+
+### Create the Worker
+
+Set up the main Worker with session management:
+
+```typescript
+export default {
+  async fetch(
+    request: Request,
+    env: Env,
+    _ctx: ExecutionContext
+  ): Promise<Response> {
+    const url = new URL(request.url);
+
+    const sessionId = request.headers.get('X-Session-Id');
+    if (!sessionId) {
+      return new Response('Missing X-Session-Id header', { status: 400 });
+    }
+
+    if (url.pathname === '/run' && request.method === 'POST') {
+      return handleRunRequest(request, env, sessionId);
+    }
+
+    return new Response('Not found', { status: 404 });
+  }
+};
+```
+
+## Example usage
+
+Interact with the assistant using natural language:
+
+```bash
+# List files in the workspace
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-session" \
+  -d '{"input": "List all files in the current directory"}'
+
+# Create a new file
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-session" \
+  -d '{"input": "Create a hello.txt file with the text Hello World"}'
+
+# Run a Python script
+curl -X POST http://localhost:8787/run \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-session" \
+  -d '{"input": "Create a Python script that prints the first 10 Fibonacci numbers and run it"}'
+```
+
+## Response format
+
+The API returns a structured response with all operations performed:
+
+```json
+{
+  "naturalResponse": "I've created the file and added the content.",
+  "commandResults": [
+    {
+      "command": "ls -la",
+      "stdout": "total 8\ndrwxr-xr-x 2 root root 4096 Jan 1 00:00 .\n...",
+      "stderr": "",
+      "exitCode": 0,
+      "timestamp": 1234567890
+    }
+  ],
+  "fileOperations": [
+    {
+      "operation": "create",
+      "path": "/workspace/hello.txt",
+      "status": "completed",
+      "output": "File created successfully",
+      "timestamp": 1234567891
+    }
+  ]
+}
+```
+
+## Setup and deployment
+
+<Steps>
+  <Step title="Create .env file">
+    Add your OpenAI API key:
+    
+    ```bash
+    OPENAI_API_KEY=your-api-key-here
+    ```
+  </Step>
+  
+  <Step title="Install dependencies">
+    ```bash
+    npm install @cloudflare/sandbox @openai/agents
+    ```
+  </Step>
+  
+  <Step title="Run locally">
+    ```bash
+    npm run dev
+    ```
+  </Step>
+  
+  <Step title="Deploy to production">
+    ```bash
+    npm run deploy
+    ```
+  </Step>
+</Steps>
+
+## Security considerations
+
+<Warning>
+  This example auto-approves all AI operations without human review. The AI can:
+  
+  - Execute ANY shell command
+  - Create, modify, or delete ANY file in /workspace
+  - No safety limits beyond the container itself
+  
+  **Do not use in production without proper approval flows and rate limiting.**
+</Warning>
+
+## Key features
+
+- **Session Management**: Each user gets their own isolated sandbox session
+- **Result Tracking**: All shell commands and file operations are tracked and returned
+- **Conversational Interface**: Natural language commands are converted to shell operations
+- **Persistent State**: Session state persists across multiple requests
+
+## Related resources
+
+- [OpenAI Agents SDK documentation](https://openai.github.io/openai-agents-js/)
+- [Command execution guide](/guides/executing-commands)
+- [File operations guide](/guides/managing-files)

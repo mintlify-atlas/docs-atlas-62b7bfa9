@@ -1,0 +1,128 @@
+---
+title: readFile
+description: Read content from a file in the sandbox
+---
+
+## Description
+
+Reads the contents of a file from the sandbox filesystem. Supports both text and binary files with automatic encoding detection.
+
+## Method Signature
+
+```typescript
+async readFile(
+  path: string,
+  options?: { encoding?: string; sessionId?: string }
+): Promise<ReadFileResult>
+```
+
+## Parameters
+
+<ParamField path="path" type="string" required>
+  Absolute path to the file to read
+</ParamField>
+
+<ParamField path="options" type="object">
+  Optional configuration for the read operation
+  
+  <ParamField path="encoding" type="string">
+    Encoding to use for reading the file (e.g., 'utf-8', 'base64')
+  </ParamField>
+  
+  <ParamField path="sessionId" type="string">
+    Session ID to use for this operation. If not provided, the default session is used.
+  </ParamField>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ReadFileResult" type="object">
+  Result of the read operation
+  
+  <ResponseField name="success" type="boolean">
+    Whether the file was read successfully
+  </ResponseField>
+  
+  <ResponseField name="path" type="string">
+    Path to the file that was read
+  </ResponseField>
+  
+  <ResponseField name="content" type="string">
+    Content of the file (UTF-8 for text files, base64 for binary files)
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="string">
+    ISO 8601 timestamp of when the operation completed
+  </ResponseField>
+  
+  <ResponseField name="encoding" type="'utf-8' | 'base64'">
+    Encoding used for the content
+  </ResponseField>
+  
+  <ResponseField name="isBinary" type="boolean">
+    Whether the file is detected as binary
+  </ResponseField>
+  
+  <ResponseField name="mimeType" type="string">
+    MIME type of the file (e.g., 'image/png', 'text/plain')
+  </ResponseField>
+  
+  <ResponseField name="size" type="number">
+    File size in bytes
+  </ResponseField>
+  
+  <ResponseField name="exitCode" type="number">
+    Exit code from the underlying read command (0 = success)
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Read a text file
+
+```typescript
+const result = await sandbox.readFile('/workspace/hello.txt');
+console.log(result.content); // File contents as string
+console.log(result.mimeType); // 'text/plain'
+```
+
+### Read a binary file
+
+```typescript
+const result = await sandbox.readFile('/workspace/image.png');
+if (result.isBinary) {
+  // Content is base64-encoded
+  const binaryData = atob(result.content);
+  console.log(`Read ${result.size} bytes`);
+}
+```
+
+### Read with custom encoding
+
+```typescript
+const result = await sandbox.readFile('/workspace/data.txt', {
+  encoding: 'utf-8'
+});
+console.log(result.content);
+```
+
+## Error Handling
+
+The method throws an error if:
+- The file does not exist
+- The file cannot be read due to permissions
+- The path is invalid
+
+```typescript
+try {
+  const result = await sandbox.readFile('/workspace/nonexistent.txt');
+} catch (error) {
+  console.error('Failed to read file:', error.message);
+}
+```
+
+## See Also
+
+- [writeFile](/api/write-file) - Write content to a file
+- [streamFile](/api/stream-file) - Stream file contents for large files
+- [collectFile](/api/collect-file) - Read entire file from stream

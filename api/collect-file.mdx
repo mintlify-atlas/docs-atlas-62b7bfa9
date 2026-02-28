@@ -1,0 +1,203 @@
+---
+title: collectFile
+description: Read an entire file from a stream into memory
+---
+
+## Description
+
+Collects all chunks from a file stream into memory, returning the complete content along with metadata. This is a convenience utility that uses `streamFile` internally.
+
+## Function Signature
+
+```typescript
+async function collectFile(
+  stream: ReadableStream<Uint8Array>
+): Promise<{ content: string | Uint8Array; metadata: FileMetadata }>
+```
+
+## Parameters
+
+<ParamField path="stream" type="ReadableStream<Uint8Array>" required>
+  The ReadableStream obtained from `sandbox.readFileStream(path)`
+</ParamField>
+
+## Returns
+
+<ResponseField name="result" type="object">
+  Object containing the complete file content and metadata
+  
+  <ResponseField name="content" type="string | Uint8Array">
+    Complete file content
+    
+    - `string` - For text files (all chunks concatenated)
+    - `Uint8Array` - For binary files (all chunks combined)
+  </ResponseField>
+  
+  <ResponseField name="metadata" type="FileMetadata">
+    Metadata about the file
+    
+    <ResponseField name="mimeType" type="string">
+      MIME type of the file (e.g., 'image/png', 'text/plain')
+    </ResponseField>
+    
+    <ResponseField name="size" type="number">
+      File size in bytes
+    </ResponseField>
+    
+    <ResponseField name="isBinary" type="boolean">
+      Whether the file is detected as binary
+    </ResponseField>
+    
+    <ResponseField name="encoding" type="'utf-8' | 'base64'">
+      Encoding used for the file content
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Read a text file
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/config.json');
+const { content, metadata } = await collectFile(stream);
+
+if (typeof content === 'string') {
+  const config = JSON.parse(content);
+  console.log('Config:', config);
+}
+
+console.log('MIME type:', metadata.mimeType);
+console.log('Size:', metadata.size, 'bytes');
+```
+
+### Read a binary file
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/image.png');
+const { content, metadata } = await collectFile(stream);
+
+if (content instanceof Uint8Array) {
+  console.log(`Read ${content.length} bytes`);
+  console.log('MIME type:', metadata.mimeType);
+  
+  // Convert to base64 for transmission
+  const base64 = btoa(String.fromCharCode(...content));
+  return Response.json({ image: base64 });
+}
+```
+
+### Read and process markdown
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/README.md');
+const { content, metadata } = await collectFile(stream);
+
+if (typeof content === 'string') {
+  const lines = content.split('\n');
+  const headers = lines.filter(line => line.startsWith('#'));
+  console.log('Headers found:', headers);
+}
+```
+
+### Read with type checking
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/data.csv');
+const { content, metadata } = await collectFile(stream);
+
+if (metadata.isBinary) {
+  console.error('Expected text file, got binary');
+  return;
+}
+
+if (typeof content === 'string') {
+  const rows = content.split('\n').map(line => line.split(','));
+  console.log(`Parsed ${rows.length} rows`);
+}
+```
+
+### Download file from sandbox
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+    
+    const stream = await sandbox.readFileStream('/workspace/report.pdf');
+    const { content, metadata } = await collectFile(stream);
+    
+    return new Response(content, {
+      headers: {
+        'Content-Type': metadata.mimeType,
+        'Content-Length': metadata.size.toString(),
+        'Content-Disposition': 'attachment; filename="report.pdf"'
+      }
+    });
+  }
+};
+```
+
+### Compare with direct read
+
+```typescript
+// Using collectFile (streaming approach)
+import { collectFile } from '@cloudflare/sandbox';
+const stream = await sandbox.readFileStream('/workspace/file.txt');
+const { content } = await collectFile(stream);
+
+// Using readFile (direct approach)
+const result = await sandbox.readFile('/workspace/file.txt');
+const content2 = result.content;
+
+// Both give same result, but collectFile is better for large files
+```
+
+## Error Handling
+
+The function throws an error if:
+- The file cannot be read
+- The stream is interrupted
+- Metadata is missing or invalid
+
+```typescript
+import { collectFile } from '@cloudflare/sandbox';
+
+try {
+  const stream = await sandbox.readFileStream('/workspace/file.txt');
+  const { content } = await collectFile(stream);
+} catch (error) {
+  console.error('Failed to collect file:', error.message);
+}
+```
+
+## Notes
+
+- Loads the entire file into memory - use `streamFile()` for large files that need chunk processing
+- Automatically handles text vs binary files
+- Binary files are decoded from base64 automatically
+- Simpler API than `streamFile()` when you need the complete file
+
+## Performance Comparison
+
+| Method | Memory Usage | Best For |
+|--------|-------------|----------|
+| `readFile()` | Moderate | Small to medium files, simple use cases |
+| `streamFile()` | Low | Large files, chunk-by-chunk processing |
+| `collectFile()` | High | Any file size, when you need complete content |
+
+## See Also
+
+- [readFileStream](/api/stream-file) - Get the ReadableStream for a file
+- [streamFile](/api/stream-file) - Process file in chunks
+- [readFile](/api/read-file) - Direct file read (not streaming)

@@ -1,0 +1,450 @@
+---
+title: Running processes
+description: Start and manage long-running background processes in sandboxes with real-time log streaming and lifecycle control.
+---
+
+Background processes let you run long-running commands that continue executing while your Worker handles other requests. Perfect for web servers, build tools, data processing jobs, and monitoring tasks.
+
+## Starting a background process
+
+Use `startProcess()` to launch commands that run in the background:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Start a simple HTTP server
+const process = await sandbox.startProcess(
+  'python3 -m http.server 8000'
+);
+
+console.log(`Process started with ID: ${process.id}`);
+console.log(`Status: ${process.status}`);
+```
+
+## Understanding the Process object
+
+Every process has a rich interface for monitoring and control:
+
+```typescript
+interface Process {
+  id: string;              // Unique process identifier
+  pid?: number;            // System process ID
+  command: string;         // Command being executed
+  status: ProcessStatus;   // Current status
+  startTime: Date;         // When process started
+  endTime?: Date;          // When process ended (if stopped)
+  exitCode?: number;       // Exit code (if process terminated)
+  sessionId: string;       // Session context
+
+  // Methods
+  kill(signal?: string): Promise<void>;
+  getStatus(): Promise<ProcessStatus>;
+  getLogs(): Promise<{ stdout: string; stderr: string }>;
+  waitForLog(pattern: string | RegExp, timeout?: number): Promise<WaitForLogResult>;
+  waitForPort(port: number, options?: WaitForPortOptions): Promise<void>;
+  waitForExit(timeout?: number): Promise<WaitForExitResult>;
+}
+```
+
+## Process lifecycle
+
+Processes go through several states:
+
+- **`starting`** - Process is being initialized
+- **`running`** - Process is actively executing
+- **`completed`** - Process exited successfully (exit code 0)
+- **`failed`** - Process exited with non-zero code
+- **`killed`** - Process was terminated by signal
+- **`error`** - Process failed to start
+
+```typescript
+const process = await sandbox.startProcess('npm run build');
+
+// Check current status
+const status = await process.getStatus();
+console.log(`Process is ${status}`);
+
+// Wait for completion
+const result = await process.waitForExit();
+console.log(`Process exited with code ${result.exitCode}`);
+```
+
+## Waiting for server readiness
+
+When starting servers, wait for them to be ready before connecting:
+
+```typescript
+// Start a web server
+const server = await sandbox.startProcess(
+  'python3 -m http.server 8000'
+);
+
+// Wait for port to be ready (HTTP check)
+await server.waitForPort(8000);
+
+console.log('Server is ready!');
+
+// Now you can expose the port
+const exposed = await sandbox.exposePort(8000);
+console.log(`Access server at: ${exposed.url}`);
+```
+
+### Custom readiness checks
+
+Customize how port readiness is checked:
+
+<CodeGroup>
+
+```typescript HTTP check
+// Wait for HTTP 200 response
+await server.waitForPort(8000, {
+  mode: 'http',
+  path: '/health',
+  status: 200,
+  timeout: 30000  // 30 second timeout
+});
+```
+
+```typescript TCP check
+// Just check if port accepts connections
+await server.waitForPort(8000, {
+  mode: 'tcp',
+  timeout: 10000
+});
+```
+
+```typescript Status range
+// Accept any 2xx or 3xx status
+await server.waitForPort(8000, {
+  mode: 'http',
+  status: { min: 200, max: 399 }
+});
+```
+
+</CodeGroup>
+
+## Streaming process logs
+
+Monitor process output in real-time:
+
+```typescript
+import { parseSSEStream } from '@cloudflare/sandbox';
+
+const process = await sandbox.startProcess('npm run watch');
+
+// Stream logs
+const stream = await sandbox.streamProcessLogs(process.id);
+
+for await (const event of parseSSEStream(stream)) {
+  switch (event.type) {
+    case 'stdout':
+      console.log('Output:', event.data);
+      break;
+    case 'stderr':
+      console.error('Error:', event.data);
+      break;
+    case 'exit':
+      console.log('Process exited:', event.exitCode);
+      break;
+  }
+}
+```
+
+<Note>
+Log streaming continues until the process exits or you close the stream. This is perfect for tailing logs or monitoring long-running tasks.
+</Note>
+
+## Waiting for log patterns
+
+Wait for specific output before proceeding:
+
+```typescript
+const server = await sandbox.startProcess(
+  'node server.js'
+);
+
+// Wait for "Server listening" message
+const result = await server.waitForLog(/Server listening on port (\d+)/);
+
+console.log('Found:', result.line);
+console.log('Port:', result.match?.[1]);
+```
+
+### Pattern matching
+
+```typescript
+// Simple string match
+await process.waitForLog('Ready to accept connections');
+
+// Regex with capture groups
+const result = await process.waitForLog(
+  /Database initialized in (\d+)ms/
+);
+console.log(`Init time: ${result.match?.[1]}ms`);
+
+// With timeout
+try {
+  await process.waitForLog('Started', 10000);
+} catch (error) {
+  console.error('Process did not start within 10 seconds');
+}
+```
+
+## Stopping processes
+
+Terminate processes gracefully or forcefully:
+
+```typescript
+const process = await sandbox.startProcess('long-running-task');
+
+// Send SIGTERM (graceful shutdown)
+await process.kill();
+
+// Send SIGKILL (immediate termination)
+await process.kill('SIGKILL');
+
+// Or use the sandbox method
+await sandbox.killProcess(process.id);
+```
+
+## Managing multiple processes
+
+### List all processes
+
+```typescript
+const processes = await sandbox.listProcesses();
+
+processes.forEach(proc => {
+  console.log(`${proc.id}: ${proc.command} (${proc.status})`);
+});
+```
+
+### Get process by ID
+
+```typescript
+const process = await sandbox.getProcess('process-id');
+
+if (process) {
+  console.log(`Status: ${process.status}`);
+  if (process.exitCode !== undefined) {
+    console.log(`Exit code: ${process.exitCode}`);
+  }
+}
+```
+
+### Kill all processes
+
+```typescript
+// Kill all running processes
+await sandbox.killAllProcesses();
+```
+
+## Process options
+
+Customize process behavior with options:
+
+```typescript
+const process = await sandbox.startProcess('node server.js', {
+  processId: 'web-server',  // Custom ID for later reference
+  cwd: '/workspace/app',    // Working directory
+  env: {
+    PORT: '8000',
+    NODE_ENV: 'production'
+  },
+  timeout: 300000,          // Kill after 5 minutes
+  autoCleanup: false        // Keep process record after exit
+});
+```
+
+## Common patterns
+
+### Development server
+
+```typescript
+// Start dev server with hot reload
+const server = await sandbox.startProcess(
+  'npm run dev',
+  { processId: 'dev-server' }
+);
+
+// Wait for it to be ready
+await server.waitForLog('Local: http');
+
+// Expose the port
+await sandbox.exposePort(5173);
+```
+
+### Build pipeline
+
+```typescript
+// Start build process
+const build = await sandbox.startProcess('npm run build');
+
+// Monitor progress
+const stream = await sandbox.streamProcessLogs(build.id);
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    // Update build progress UI
+    if (event.data.includes('✓')) {
+      console.log('Build step completed:', event.data);
+    }
+  }
+}
+
+// Wait for completion
+const result = await build.waitForExit();
+
+if (result.exitCode === 0) {
+  console.log('Build succeeded!');
+} else {
+  console.error('Build failed');
+}
+```
+
+### Database initialization
+
+```typescript
+// Start database
+const db = await sandbox.startProcess(
+  'postgres -D /workspace/data',
+  { processId: 'postgres' }
+);
+
+// Wait for ready message
+await db.waitForLog('database system is ready to accept connections');
+
+// Run migrations
+await sandbox.exec('psql -f /workspace/migrations/init.sql');
+
+console.log('Database ready!');
+```
+
+### Log monitoring
+
+```typescript
+// Tail application logs
+const tail = await sandbox.startProcess(
+  'tail -f /workspace/app.log',
+  { processId: 'log-monitor' }
+);
+
+// Stream and filter logs
+const stream = await sandbox.streamProcessLogs(tail.id);
+
+for await (const event of parseSSEStream(stream)) {
+  if (event.type === 'stdout') {
+    // Alert on errors
+    if (event.data.includes('ERROR')) {
+      await sendAlert(event.data);
+    }
+  }
+}
+```
+
+## Error handling
+
+Always handle process failures:
+
+```typescript
+try {
+  const process = await sandbox.startProcess('npm test');
+  
+  // Wait for completion with timeout
+  const result = await process.waitForExit(60000);
+  
+  if (result.exitCode !== 0) {
+    // Get error logs
+    const logs = await process.getLogs();
+    console.error('Tests failed:', logs.stderr);
+    
+    throw new Error(`Tests failed with exit code ${result.exitCode}`);
+  }
+  
+  console.log('All tests passed!');
+} catch (error) {
+  console.error('Test execution failed:', error.message);
+}
+```
+
+## Best practices
+
+<Steps>
+
+### Use custom process IDs
+
+Assign meaningful IDs to processes you'll reference later:
+
+```typescript
+await sandbox.startProcess('python3 -m http.server 8000', {
+  processId: 'web-server'
+});
+
+// Later, easily retrieve it
+const server = await sandbox.getProcess('web-server');
+```
+
+### Set timeouts for finite tasks
+
+Previent runaway processes by setting timeouts:
+
+```typescript
+await sandbox.startProcess('npm run build', {
+  timeout: 300000  // 5 minute max build time
+});
+```
+
+### Monitor critical processes
+
+Set up monitoring for important services:
+
+```typescript
+const server = await sandbox.startProcess('node server.js');
+
+// Check health periodically
+setInterval(async () => {
+  const status = await server.getStatus();
+  
+  if (status !== 'running') {
+    console.error('Server died, restarting...');
+    await sandbox.startProcess('node server.js');
+  }
+}, 30000);
+```
+
+### Clean up processes
+
+Kill processes when you're done to free resources:
+
+```typescript
+try {
+  const server = await sandbox.startProcess('node server.js');
+  // Use server...
+} finally {
+  await sandbox.killAllProcesses();
+}
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Exposing ports" icon="globe" href="/guides/exposing-ports">
+  Make process services accessible via preview URLs
+</Card>
+
+<Card title="Streaming output" icon="stream" href="/guides/streaming-output">
+  Advanced streaming patterns for real-time updates
+</Card>
+
+<Card title="Executing commands" icon="terminal" href="/guides/executing-commands">
+  Run one-off commands with exec()
+</Card>
+
+<Card title="Managing files" icon="folder" href="/guides/managing-files">
+  Work with files and directories
+</Card>
+
+</CardGroup>

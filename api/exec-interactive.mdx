@@ -1,0 +1,156 @@
+---
+title: 'execInteractive'
+description: 'Execute an interactive command with PTY support'
+---
+
+Executes a command in an interactive pseudo-terminal (PTY) with support for terminal features like colors, cursor positioning, and interactive input.
+
+## Method Signature
+
+```typescript
+await sandbox.execInteractive(
+  command: string,
+  options?: PtyOptions
+): Promise<ExecResult>
+```
+
+## Parameters
+
+<ParamField path="command" type="string" required>
+  Command to execute in the PTY. Typically used for interactive programs like shells, text editors, or TUI applications.
+</ParamField>
+
+<ParamField path="options" type="PtyOptions">
+  PTY configuration options
+
+  <Expandable title="PtyOptions">
+    <ParamField path="timeout" type="number">
+      Maximum execution time in milliseconds
+    </ParamField>
+
+    <ParamField path="env" type="Record<string, string>">
+      Environment variables for the command
+    </ParamField>
+
+    <ParamField path="cwd" type="string">
+      Working directory for the command
+    </ParamField>
+
+    <ParamField path="sessionId" type="string">
+      Session ID to execute in
+    </ParamField>
+
+    <ParamField path="cols" type="number" default="80">
+      Terminal width in columns
+    </ParamField>
+
+    <ParamField path="rows" type="number" default="24">
+      Terminal height in rows
+    </ParamField>
+
+    <ParamField path="input" type="string">
+      Input to send to the command's stdin
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="ExecResult" type="object">
+  <Expandable title="ExecResult fields">
+    <ResponseField name="stdout" type="string">
+      Raw terminal output including ANSI escape codes for colors and formatting
+    </ResponseField>
+
+    <ResponseField name="stderr" type="string">
+      Standard error output (usually empty for PTY commands)
+    </ResponseField>
+
+    <ResponseField name="exitCode" type="number">
+      Exit code from the command
+    </ResponseField>
+
+    <ResponseField name="success" type="boolean">
+      True if exitCode is 0
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+### Run interactive shell command
+
+```typescript
+const result = await sandbox.execInteractive('ls --color=always');
+// Output includes ANSI color codes for colored file listing
+console.log(result.stdout);
+```
+
+### Execute with custom terminal size
+
+```typescript
+const result = await sandbox.execInteractive('htop', {
+  cols: 120,
+  rows: 40,
+  timeout: 1000
+});
+```
+
+### Send input to interactive program
+
+```typescript
+const result = await sandbox.execInteractive('python3', {
+  input: 'print("Hello from Python")\nexit()\n'
+});
+console.log(result.stdout);
+```
+
+### Run vim in headless mode
+
+```typescript
+const result = await sandbox.execInteractive('vim', {
+  input: 'iHello World\x1b:wq\n',
+  timeout: 5000
+});
+```
+
+### Capture colored output
+
+```typescript
+// Run a command that produces colored output
+const result = await sandbox.execInteractive('npm test', {
+  env: { FORCE_COLOR: '1' }
+});
+
+// The stdout contains ANSI escape codes
+// You can render this in a terminal or strip the codes
+console.log(result.stdout);
+```
+
+## When to Use
+
+Use `execInteractive` when:
+- Running commands that require a PTY (interactive shells, vim, htop)
+- Capturing colored terminal output (test frameworks, build tools)
+- Working with TUI applications
+- Sending input to interactive programs
+
+Use regular `exec` for:
+- Non-interactive commands
+- When you don't need ANSI escape codes
+- Better performance for simple commands
+
+## Terminal Features
+
+PTY execution enables:
+- **ANSI escape codes** - Colors, cursor positioning, formatting
+- **Terminal size** - Commands see proper COLUMNS and LINES env vars
+- **Raw mode** - No line buffering, immediate character input
+- **Job control** - Ctrl+C, Ctrl+Z signal handling
+- **Terminal type** - TERM environment variable set
+
+## Related Methods
+
+- [exec](/api/exec) - Execute non-interactive commands
+- [execStream](/api/exec-stream) - Stream command output
+- [proxyTerminal](/guides/exposing-ports) - Full terminal proxy for web clients

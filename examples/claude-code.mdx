@@ -1,0 +1,242 @@
+---
+title: Claude Code in headless mode
+description: Run Claude Code headless on any repository using Cloudflare Sandboxes
+---
+
+Run Claude Code in headless mode on Cloudflare Sandboxes to automatically implement features and fix bugs in any repository. This example shows how to clone a repository, run Claude Code with a task, and retrieve the changes.
+
+## Overview
+
+This example demonstrates:
+
+- Running Claude Code in headless mode
+- Cloning repositories into sandboxes
+- Automating feature implementation and bug fixes
+- Extracting git diffs from AI-generated changes
+
+## How it works
+
+<Steps>
+  <Step title="Worker receives request">
+    The Worker accepts a POST request with a repository URL and task description.
+  </Step>
+  
+  <Step title="Sandbox spawns and clones repo">
+    A new sandbox is created and the repository is cloned using `gitCheckout()`.
+  </Step>
+  
+  <Step title="Claude Code runs headless">
+    Claude Code runs in headless mode with the provided task and auto-accepts file edits.
+  </Step>
+  
+  <Step title="Changes are made">
+    Claude edits all necessary files to complete the task.
+  </Step>
+  
+  <Step title="Diff is returned">
+    The Worker returns the output logs and git diff of all changes.
+  </Step>
+</Steps>
+
+## Implementation
+
+### Helper function
+
+Create a helper to extract command output:
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+interface CmdOutput {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+const getOutput = (res: CmdOutput) => (res.success ? res.stdout : res.stderr);
+```
+
+### Custom system prompt
+
+Define instructions for Claude Code:
+
+```typescript
+const EXTRA_SYSTEM =
+  'You are an automatic feature-implementer/bug-fixer.' +
+  'You apply all necessary changes to achieve the user request. You must ensure you DO NOT commit the changes, ' +
+  'so the pipeline can read the local `git diff` and apply the change upstream.';
+```
+
+### Worker implementation
+
+Create the Worker that orchestrates the entire flow:
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === 'POST') {
+      try {
+        const { repo, task } = await request.json<{
+          repo?: string;
+          task?: string;
+        }>();
+        if (!repo || !task)
+          return new Response('invalid body', { status: 400 });
+
+        // Get the repo name from the URL
+        const name = repo.split('/').pop() ?? 'tmp';
+
+        // Create a new sandbox
+        const sandbox = getSandbox(
+          env.Sandbox,
+          crypto.randomUUID().slice(0, 8)
+        );
+
+        // Clone the repository
+        await sandbox.gitCheckout(repo, { targetDir: name });
+
+        const { ANTHROPIC_API_KEY } = env;
+
+        // Set environment variables for the session
+        await sandbox.setEnvVars({ ANTHROPIC_API_KEY });
+
+        // Run Claude Code with the task
+        const cmd = `cd ${name} && claude --append-system-prompt "${EXTRA_SYSTEM}" -p "${task.replaceAll(
+          '"',
+          '\\"'
+        )}" --permission-mode acceptEdits`;
+
+        const logs = getOutput(await sandbox.exec(cmd));
+        const diff = getOutput(await sandbox.exec('git diff'));
+        return Response.json({ logs, diff });
+      } catch {
+        return new Response('invalid body', { status: 400 });
+      }
+    }
+    return new Response('not found');
+  }
+};
+
+export { Sandbox } from '@cloudflare/sandbox';
+```
+
+## Example usage
+
+Send tasks to Claude Code for automatic implementation:
+
+```bash
+# Implement a new feature
+curl -X POST http://localhost:8787 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "https://github.com/user/repo",
+    "task": "Add a dark mode toggle to the header component"
+  }'
+
+# Fix a bug
+curl -X POST http://localhost:8787 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "https://github.com/user/repo",
+    "task": "Fix the pagination bug where clicking next page doesn't update the URL"
+  }'
+
+# Refactor code
+curl -X POST http://localhost:8787 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "https://github.com/user/repo",
+    "task": "Refactor the authentication logic to use async/await instead of callbacks"
+  }'
+```
+
+## Response format
+
+The API returns Claude's logs and the git diff:
+
+```json
+{
+  "logs": "Reading repository structure...\nAnalyzing code...\nApplying changes...",
+  "diff": "diff --git a/src/header.tsx b/src/header.tsx\nindex 1234567..abcdefg 100644\n--- a/src/header.tsx\n+++ b/src/header.tsx\n@@ -10,6 +10,7 @@\n+  const [darkMode, setDarkMode] = useState(false);\n..."
+}
+```
+
+## Configuration
+
+### Environment variables
+
+Add your Anthropic API key to `wrangler.toml`:
+
+```toml
+[env.production.vars]
+ANTHROPIC_API_KEY = "your-api-key-here"
+```
+
+For local development, use a `.dev.vars` file:
+
+```bash
+ANTHROPIC_API_KEY=your-api-key-here
+```
+
+### Claude Code permissions
+
+The example uses `--permission-mode acceptEdits` to auto-approve file changes. This is safe because:
+
+- Changes are made in an isolated sandbox
+- The diff is returned for review before applying upstream
+- No commits are made automatically
+
+## Setup and deployment
+
+<Steps>
+  <Step title="Install Claude Code">
+    The Sandbox SDK container includes Claude Code by default. No additional installation needed.
+  </Step>
+  
+  <Step title="Set up API key">
+    Add your Anthropic API key to environment variables.
+  </Step>
+  
+  <Step title="Run locally">
+    ```bash
+    npm run dev
+    ```
+  </Step>
+  
+  <Step title="Deploy to production">
+    ```bash
+    npx wrangler deploy
+    ```
+  </Step>
+</Steps>
+
+## Use cases
+
+- **Automated Feature Implementation**: Describe a feature and let Claude implement it
+- **Bug Fixing**: Provide bug descriptions and get automated fixes
+- **Code Refactoring**: Request refactoring and review the changes before applying
+- **CI/CD Integration**: Integrate into pipelines for automated code improvements
+- **Code Review Assistance**: Generate suggested fixes for review comments
+
+## Key features
+
+- **Headless Operation**: No interactive prompts, fully automated
+- **Git Integration**: Automatic repository cloning and diff generation
+- **Custom Instructions**: Add custom system prompts to guide Claude's behavior
+- **Isolated Execution**: Each request runs in a fresh sandbox environment
+
+## Tips
+
+<Tip>
+  Be specific in your task descriptions. Instead of "improve the code", try "refactor the authentication logic to use modern async/await patterns and add proper error handling".
+</Tip>
+
+<Tip>
+  Review the diff before applying changes to your repository. The sandbox provides a safe environment to see what Claude would change.
+</Tip>
+
+## Related resources
+
+- [Claude Code documentation](https://claude.ai/code)
+- [Git integration guide](/guides/git-integration)
+- [Command execution guide](/guides/executing-commands)

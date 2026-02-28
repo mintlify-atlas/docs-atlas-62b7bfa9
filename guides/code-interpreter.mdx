@@ -1,0 +1,551 @@
+---
+title: Code interpreter
+description: Execute Python and JavaScript code with structured outputs, rich formatting, and interactive contexts for AI applications.
+---
+
+The Code Interpreter provides a high-level API for executing Python and JavaScript code with rich structured outputs. Perfect for AI agents, data analysis, interactive notebooks, and educational applications.
+
+## Quick start
+
+Run Python code and get structured results:
+
+```typescript
+const sandbox = getSandbox(env.Sandbox, 'my-sandbox');
+
+// Execute Python code
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 2 * np.pi, 100)
+y = np.sin(x)
+
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.savefig('sine.png')
+plt.show()
+
+print(f"Plotted {len(x)} points")
+`);
+
+// Access results
+console.log('Stdout:', execution.logs.stdout);
+console.log('Results:', execution.results);
+```
+
+<Note>
+The Code Interpreter automatically captures outputs in multiple formats: text, HTML, images, and more. Perfect for displaying results in UIs or feeding back to AI models.
+</Note>
+
+## Understanding execution results
+
+Every execution returns an `Execution` object with rich output:
+
+```typescript
+const execution = await sandbox.runCode('print(2 + 2)');
+
+// Logs from print statements
+console.log(execution.logs.stdout);  // ["4\n"]
+
+// Structured results from expressions
+console.log(execution.results);      // []
+
+// Errors if execution failed
+console.log(execution.error);        // undefined
+```
+
+## Result types
+
+The interpreter captures different output types:
+
+### Text output
+
+```typescript
+const execution = await sandbox.runCode(`
+x = [1, 2, 3, 4, 5]
+print("List:", x)
+x
+`);
+
+// Print statement output
+console.log(execution.logs.stdout);
+// ["List: [1, 2, 3, 4, 5]\n"]
+
+// Expression result
+console.log(execution.results[0].text);
+// "[1, 2, 3, 4, 5]"
+```
+
+### HTML output
+
+```typescript
+const execution = await sandbox.runCode(`
+import pandas as pd
+
+df = pd.DataFrame({
+    'name': ['Alice', 'Bob', 'Charlie'],
+    'age': [25, 30, 35]
+})
+
+df
+`);
+
+// DataFrame renders as HTML table
+const htmlResult = execution.results[0];
+console.log(htmlResult.html);
+// "<table>...</table>"
+
+// Display in UI
+document.getElementById('output').innerHTML = htmlResult.html;
+```
+
+### Image output
+
+```typescript
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+
+plt.plot([1, 2, 3], [1, 4, 9])
+plt.savefig('plot.png')
+plt.show()
+`);
+
+const imageResult = execution.results[0];
+console.log(imageResult.formats);
+// { 'image/png': '...base64...' }
+
+// Display image
+const img = document.createElement('img');
+img.src = `data:image/png;base64,${imageResult.formats['image/png']}`;
+```
+
+### JSON output
+
+```typescript
+const execution = await sandbox.runCode(`
+import json
+
+data = {'name': 'Alice', 'age': 25}
+json.dumps(data)
+`);
+
+const jsonResult = execution.results[0];
+const data = JSON.parse(jsonResult.text);
+console.log(data);  // { name: 'Alice', age: 25 }
+```
+
+## Execution contexts
+
+Contexts maintain state across multiple code executions:
+
+```typescript
+// Create a context
+const context = await sandbox.createCodeContext({
+  language: 'python'
+});
+
+// Execute code in context
+const exec1 = await sandbox.runCode('x = 10', {
+  context
+});
+
+const exec2 = await sandbox.runCode('y = x + 5', {
+  context
+});
+
+const exec3 = await sandbox.runCode('print(x, y)', {
+  context
+});
+
+console.log(exec3.logs.stdout);  // ["10 15\n"]
+```
+
+<Note>
+Contexts are like notebook cells - variables persist between executions. Perfect for interactive AI applications where state needs to be maintained.
+</Note>
+
+## Streaming execution
+
+Stream output in real-time for long-running code:
+
+```typescript
+const execution = await sandbox.runCode(`
+import time
+
+for i in range(5):
+    print(f"Step {i}")
+    time.sleep(1)
+`, {
+  onStdout: (output) => {
+    console.log('Output:', output.text);
+  },
+  onStderr: (output) => {
+    console.error('Error:', output.text);
+  },
+  onResult: (result) => {
+    console.log('Result:', result);
+  },
+  onError: (error) => {
+    console.error('Execution failed:', error);
+  }
+});
+```
+
+## JavaScript execution
+
+Run JavaScript and TypeScript code:
+
+```typescript
+const execution = await sandbox.runCode(`
+const data = [1, 2, 3, 4, 5];
+const sum = data.reduce((a, b) => a + b, 0);
+const average = sum / data.length;
+
+console.log(\`Average: \${average}\`);
+average
+`, {
+  language: 'javascript'
+});
+
+console.log(execution.logs.stdout);  // ["Average: 3\n"]
+console.log(execution.results[0].text);  // "3"
+```
+
+## TypeScript execution
+
+```typescript
+const execution = await sandbox.runCode(`
+interface User {
+  name: string;
+  age: number;
+}
+
+const users: User[] = [
+  { name: 'Alice', age: 25 },
+  { name: 'Bob', age: 30 }
+];
+
+const avgAge = users.reduce((sum, u) => sum + u.age, 0) / users.length;
+console.log(\`Average age: \${avgAge}\`);
+avgAge
+`, {
+  language: 'typescript'
+});
+
+console.log(execution.results[0].text);  // "27.5"
+```
+
+## Error handling
+
+Capture and handle execution errors:
+
+```typescript
+const execution = await sandbox.runCode(`
+import pandas as pd
+
+# This will fail
+df = pd.read_csv('nonexistent.csv')
+`);
+
+if (execution.error) {
+  console.error('Error name:', execution.error.name);
+  console.error('Error message:', execution.error.message);
+  console.error('Traceback:', execution.error.traceback);
+}
+```
+
+## Common patterns
+
+### Data analysis
+
+```typescript
+const execution = await sandbox.runCode(`
+import pandas as pd
+import numpy as np
+
+# Load and analyze data
+data = {
+    'product': ['A', 'B', 'C', 'D'],
+    'sales': [100, 150, 200, 175],
+    'cost': [50, 80, 120, 90]
+}
+
+df = pd.DataFrame(data)
+df['profit'] = df['sales'] - df['cost']
+
+print("Summary Statistics:")
+print(df.describe())
+
+print("\nTop product by profit:")
+top = df.loc[df['profit'].idxmax()]
+print(f"{top['product']}: ${top['profit']}")
+
+df
+`);
+
+// Access the DataFrame HTML
+const dfHtml = execution.results.find(r => r.html)?.html;
+```
+
+### Visualization
+
+```typescript
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Generate data
+x = np.linspace(0, 10, 100)
+y1 = np.sin(x)
+y2 = np.cos(x)
+
+# Create plot
+plt.figure(figsize=(10, 6))
+plt.plot(x, y1, label='sin(x)')
+plt.plot(x, y2, label='cos(x)')
+plt.legend()
+plt.title('Trigonometric Functions')
+plt.grid(True)
+
+plt.savefig('trig.png', dpi=150, bbox_inches='tight')
+plt.show()
+`);
+
+// Get the image
+const image = execution.results[0];
+const pngData = image.formats['image/png'];
+```
+
+### Machine learning
+
+```typescript
+const execution = await sandbox.runCode(`
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+# Sample data
+X = np.array([[1], [2], [3], [4], [5]])
+y = np.array([2, 4, 5, 4, 5])
+
+# Train model
+model = LinearRegression()
+model.fit(X, y)
+
+# Make predictions
+X_test = np.array([[6], [7], [8]])
+predictions = model.predict(X_test)
+
+print("Predictions for 6, 7, 8:")
+for x, pred in zip(X_test.flatten(), predictions):
+    print(f"  {x}: {pred:.2f}")
+
+model.score(X, y)
+`);
+
+console.log('Model accuracy:', execution.results[0].text);
+```
+
+### File processing
+
+```typescript
+// First, upload some data
+await sandbox.writeFile('/workspace/data.csv', `
+name,age,city
+Alice,25,NYC
+Bob,30,LA
+Charlie,35,Chicago
+`);
+
+// Process the file
+const execution = await sandbox.runCode(`
+import pandas as pd
+
+df = pd.read_csv('/workspace/data.csv')
+
+# Add computed column
+df['age_group'] = df['age'].apply(
+    lambda x: 'young' if x < 30 else 'adult'
+)
+
+print(f"Processed {len(df)} records")
+
+# Save results
+df.to_json('/workspace/output.json', orient='records')
+
+df
+`);
+
+// Read the output
+const output = await sandbox.readFile('/workspace/output.json');
+const results = JSON.parse(output.content);
+```
+
+## AI agent integration
+
+Perfect for giving AI agents code execution capabilities:
+
+```typescript
+import { generateText, tool } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { z } from 'zod';
+
+const result = await generateText({
+  model: openai('gpt-4'),
+  messages: [{ 
+    role: 'user', 
+    content: 'Calculate the first 10 Fibonacci numbers'
+  }],
+  tools: {
+    execute_python: tool({
+      description: 'Execute Python code',
+      parameters: z.object({
+        code: z.string().describe('Python code to execute')
+      }),
+      execute: async ({ code }) => {
+        const execution = await sandbox.runCode(code);
+        
+        return {
+          stdout: execution.logs.stdout.join(''),
+          results: execution.results.map(r => r.text),
+          error: execution.error
+        };
+      }
+    })
+  }
+});
+```
+
+## Installing packages
+
+Install additional Python packages:
+
+```typescript
+// Install packages
+await sandbox.exec('pip install requests beautifulsoup4');
+
+// Use them
+const execution = await sandbox.runCode(`
+import requests
+from bs4 import BeautifulSoup
+
+response = requests.get('https://example.com')
+soup = BeautifulSoup(response.text, 'html.parser')
+title = soup.find('title').text
+
+print(f"Page title: {title}")
+title
+`);
+```
+
+## Managing contexts
+
+### List contexts
+
+```typescript
+const contexts = await sandbox.listCodeContexts();
+
+contexts.forEach(ctx => {
+  console.log(`Context ${ctx.id}: ${ctx.language}`);
+});
+```
+
+### Delete context
+
+```typescript
+const context = await sandbox.createCodeContext();
+
+// Use context...
+
+// Clean up when done
+await sandbox.deleteCodeContext(context.id);
+```
+
+## Best practices
+
+<Steps>
+
+### Use contexts for stateful interactions
+
+Create contexts when you need to maintain state across multiple executions:
+
+```typescript
+const context = await sandbox.createCodeContext();
+
+// Execute multiple cells
+for (const cell of cells) {
+  await sandbox.runCode(cell, { context });
+}
+```
+
+### Stream long-running code
+
+Always stream output for code that might take more than a few seconds:
+
+```typescript
+await sandbox.runCode(longRunningCode, {
+  onStdout: (output) => {
+    // Update UI with progress
+  }
+});
+```
+
+### Handle errors gracefully
+
+Check for errors before using results:
+
+```typescript
+const execution = await sandbox.runCode(userCode);
+
+if (execution.error) {
+  return Response.json({
+    error: execution.error.message,
+    traceback: execution.error.traceback
+  }, { status: 400 });
+}
+
+return Response.json({
+  results: execution.results
+});
+```
+
+### Capture rich outputs
+
+Check for HTML and image outputs for better presentation:
+
+```typescript
+const execution = await sandbox.runCode(code);
+
+for (const result of execution.results) {
+  if (result.html) {
+    // Render HTML (DataFrame, tables, etc.)
+  } else if (result.formats['image/png']) {
+    // Display image
+  } else {
+    // Show text
+  }
+}
+```
+
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+
+<Card title="Executing commands" icon="terminal" href="/guides/executing-commands">
+  Run shell commands for more control
+</Card>
+
+<Card title="Managing files" icon="folder" href="/guides/managing-files">
+  Work with code files and data
+</Card>
+
+<Card title="Running processes" icon="server" href="/guides/running-processes">
+  Start long-running services
+</Card>
+
+<Card title="Examples" icon="rocket" href="/tutorials">
+  See complete AI agent examples
+</Card>
+
+</CardGroup>

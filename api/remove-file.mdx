@@ -1,0 +1,135 @@
+---
+title: deleteFile
+description: Delete a file or directory from the sandbox
+---
+
+## Description
+
+Deletes a file or directory from the sandbox filesystem. Use with caution as this operation is irreversible.
+
+## Method Signature
+
+```typescript
+async deleteFile(
+  path: string,
+  sessionId?: string
+): Promise<DeleteFileResult>
+```
+
+## Parameters
+
+<ParamField path="path" type="string" required>
+  Absolute path to the file or directory to delete
+</ParamField>
+
+<ParamField path="sessionId" type="string">
+  Session ID to use for this operation. If not provided, the default session is used.
+</ParamField>
+
+## Returns
+
+<ResponseField name="DeleteFileResult" type="object">
+  Result of the delete operation
+  
+  <ResponseField name="success" type="boolean">
+    Whether the file or directory was deleted successfully
+  </ResponseField>
+  
+  <ResponseField name="path" type="string">
+    Path to the file or directory that was deleted
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="string">
+    ISO 8601 timestamp of when the operation completed
+  </ResponseField>
+  
+  <ResponseField name="exitCode" type="number">
+    Exit code from the underlying delete command (0 = success)
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Delete a file
+
+```typescript
+const result = await sandbox.deleteFile('/workspace/temp.txt');
+console.log(result.success); // true
+```
+
+### Delete a directory
+
+```typescript
+// Deletes directory and all its contents
+await sandbox.deleteFile('/workspace/old-project');
+```
+
+### Safe deletion with existence check
+
+```typescript
+const exists = await sandbox.exists('/workspace/temp.txt');
+if (exists.exists) {
+  await sandbox.deleteFile('/workspace/temp.txt');
+  console.log('File deleted');
+} else {
+  console.log('File does not exist');
+}
+```
+
+### Delete multiple files
+
+```typescript
+const filesToDelete = [
+  '/workspace/file1.txt',
+  '/workspace/file2.txt',
+  '/workspace/file3.txt'
+];
+
+for (const file of filesToDelete) {
+  await sandbox.deleteFile(file);
+}
+```
+
+### Cleanup temporary files
+
+```typescript
+// List and delete all .tmp files
+const result = await sandbox.listFiles('/workspace', { recursive: true });
+const tempFiles = result.files.filter(
+  file => file.type === 'file' && file.name.endsWith('.tmp')
+);
+
+for (const file of tempFiles) {
+  await sandbox.deleteFile(file.absolutePath);
+}
+console.log(`Deleted ${tempFiles.length} temporary files`);
+```
+
+## Error Handling
+
+The method throws an error if:
+- The file or directory does not exist
+- Insufficient permissions to delete
+- The path is invalid or protected
+
+```typescript
+try {
+  await sandbox.deleteFile('/workspace/important.txt');
+} catch (error) {
+  console.error('Failed to delete file:', error.message);
+}
+```
+
+## Notes
+
+- **Deletion is permanent** - there is no recycle bin or undo
+- Deleting a directory removes all its contents recursively
+- Protected system paths cannot be deleted
+- Use [exists](/api/list-files) to check before deleting if needed
+
+## See Also
+
+- [writeFile](/api/write-file) - Write content to a file
+- [readFile](/api/read-file) - Read file contents
+- [listFiles](/api/list-files) - List directory contents
+- [exists](/api/list-files) - Check if a path exists

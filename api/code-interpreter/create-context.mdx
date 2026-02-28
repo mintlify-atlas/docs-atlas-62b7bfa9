@@ -1,0 +1,104 @@
+---
+title: 'createCodeContext'
+description: 'Create a new code execution context for running Python, JavaScript, or TypeScript code'
+---
+
+Creates an isolated execution context for running code. Each context maintains its own state, variables, and execution history.
+
+## Method Signature
+
+```typescript
+async createCodeContext(
+  options?: CreateContextOptions
+): Promise<CodeContext>
+```
+
+## Parameters
+
+<ParamField path="options" type="CreateContextOptions" optional>
+  Configuration options for the context
+  
+  <Expandable title="properties">
+    <ParamField path="language" type="'python' | 'javascript' | 'typescript'" default="'python'">
+      Programming language for the context
+    </ParamField>
+    
+    <ParamField path="cwd" type="string" default="'/workspace'">
+      Working directory for the context
+    </ParamField>
+    
+    <ParamField path="envVars" type="Record<string, string | undefined>" optional>
+      Environment variables for the context. Undefined values are skipped.
+    </ParamField>
+    
+    <ParamField path="timeout" type="number" default={30000}>
+      Request timeout in milliseconds
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="CodeContext" type="object">
+  The created code execution context
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string" required>
+      Unique identifier for the context
+    </ResponseField>
+    
+    <ResponseField name="language" type="string" required>
+      Programming language of the context
+    </ResponseField>
+    
+    <ResponseField name="cwd" type="string" required>
+      Current working directory
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="Date" required>
+      When the context was created
+    </ResponseField>
+    
+    <ResponseField name="lastUsed" type="Date" required>
+      When the context was last used
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Create a Python context
+const pythonContext = await sandbox.createCodeContext({
+  language: 'python',
+  cwd: '/workspace/analysis',
+  envVars: {
+    API_KEY: 'secret-key'
+  }
+});
+
+console.log(pythonContext.id); // "ctx_abc123..."
+
+// Create a JavaScript context
+const jsContext = await sandbox.createCodeContext({
+  language: 'javascript'
+});
+```
+
+## Notes
+
+- Contexts are isolated from each other - variables and state are not shared
+- Multiple contexts can exist simultaneously
+- Each context has its own execution history
+- Contexts persist until explicitly deleted or the sandbox is destroyed
+- Use the same context for related code executions to maintain state
+
+## See Also
+
+- [runCode](/api/code-interpreter/run-code) - Execute code in a context
+- [listCodeContexts](/api/code-interpreter/list-contexts) - List all contexts
+- [deleteCodeContext](/api/code-interpreter/delete-context) - Delete a context

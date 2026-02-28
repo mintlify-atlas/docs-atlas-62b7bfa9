@@ -1,0 +1,176 @@
+---
+title: 'runCode'
+description: 'Execute Python, JavaScript, or TypeScript code and get structured results'
+---
+
+Executes code in an isolated context and returns structured results including output, errors, and visualizations.
+
+## Method Signature
+
+```typescript
+async runCode(
+  code: string,
+  options?: RunCodeOptions
+): Promise<Execution>
+```
+
+## Parameters
+
+<ParamField path="code" type="string" required>
+  The code to execute
+</ParamField>
+
+<ParamField path="options" type="RunCodeOptions" optional>
+  Execution options
+  
+  <Expandable title="properties">
+    <ParamField path="context" type="CodeContext" optional>
+      Context to run the code in. If not provided, uses default context for the language.
+    </ParamField>
+    
+    <ParamField path="language" type="'python' | 'javascript' | 'typescript'" default="'python'">
+      Language to use if context is not provided
+    </ParamField>
+    
+    <ParamField path="envVars" type="Record<string, string | undefined>" optional>
+      Environment variables for this execution. Undefined values are skipped.
+    </ParamField>
+    
+    <ParamField path="timeout" type="number" default={60000}>
+      Execution timeout in milliseconds
+    </ParamField>
+    
+    <ParamField path="signal" type="AbortSignal" optional>
+      AbortSignal for cancelling execution
+    </ParamField>
+    
+    <ParamField path="onStdout" type="(output: OutputMessage) => void" optional>
+      Callback for stdout output
+    </ParamField>
+    
+    <ParamField path="onStderr" type="(output: OutputMessage) => void" optional>
+      Callback for stderr output
+    </ParamField>
+    
+    <ParamField path="onResult" type="(result: Result) => void" optional>
+      Callback for execution results (charts, tables, etc)
+    </ParamField>
+    
+    <ParamField path="onError" type="(error: ExecutionError) => void" optional>
+      Callback for execution errors
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Returns
+
+<ResponseField name="Execution" type="object">
+  The execution result
+  
+  <Expandable title="properties">
+    <ResponseField name="code" type="string" required>
+      The code that was executed
+    </ResponseField>
+    
+    <ResponseField name="context" type="CodeContext" required>
+      The context used for execution
+    </ResponseField>
+    
+    <ResponseField name="results" type="Result[]" required>
+      Array of execution results (charts, tables, formatted output)
+    </ResponseField>
+    
+    <ResponseField name="logs" type="object" required>
+      Accumulated output
+      <Expandable title="properties">
+        <ResponseField name="stdout" type="string[]" required>
+          Standard output lines
+        </ResponseField>
+        <ResponseField name="stderr" type="string[]" required>
+          Standard error lines
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="error" type="ExecutionError" optional>
+      Execution error if any
+    </ResponseField>
+    
+    <ResponseField name="executionCount" type="number" optional>
+      Execution count (for interpreter)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example
+
+```typescript
+import { getSandbox } from '@cloudflare/sandbox';
+
+const sandbox = getSandbox(env.SANDBOX, 'my-sandbox');
+
+// Execute Python code
+const execution = await sandbox.runCode(`
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.show()
+`);
+
+// Access results
+console.log('Stdout:', execution.logs.stdout);
+console.log('Charts:', execution.results.length);
+
+if (execution.results[0]?.chart) {
+  console.log('Chart type:', execution.results[0].chart.type);
+  console.log('Chart image:', execution.results[0].png);
+}
+
+// Handle errors
+if (execution.error) {
+  console.error('Error:', execution.error.message);
+  console.error('Traceback:', execution.error.traceback);
+}
+```
+
+## Example with Streaming
+
+```typescript
+const execution = await sandbox.runCode(
+  'print("Hello")',
+  {
+    language: 'python',
+    onStdout: (output) => {
+      console.log('Stdout:', output.text);
+    },
+    onResult: (result) => {
+      if (result.chart) {
+        console.log('Received chart:', result.chart.type);
+      }
+    },
+    onError: (error) => {
+      console.error('Error:', error.message);
+    }
+  }
+);
+```
+
+## Notes
+
+- Automatically creates a default context if none is provided
+- Supports multiple result formats: text, HTML, images (PNG/JPEG/SVG), charts, JSON
+- Chart detection works with matplotlib, plotly, altair, and seaborn
+- Results are structured for easy rendering in UIs
+- Use callbacks for real-time output processing
+- Context state persists between executions
+
+## See Also
+
+- [runCodeStream](/api/code-interpreter/run-code-stream) - Stream code execution
+- [createCodeContext](/api/code-interpreter/create-context) - Create a context
+- [Execution type](/api/types/execution) - Result type reference

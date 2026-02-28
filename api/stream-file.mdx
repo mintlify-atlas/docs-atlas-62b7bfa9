@@ -1,0 +1,184 @@
+---
+title: streamFile
+description: Stream file contents in chunks for efficient memory usage
+---
+
+## Description
+
+Streams a file from the sandbox in chunks, which is ideal for reading large files without loading the entire content into memory. Automatically handles base64 decoding for binary files.
+
+## Function Signature
+
+```typescript
+async function* streamFile(
+  stream: ReadableStream<Uint8Array>
+): AsyncGenerator<FileChunk, FileMetadata>
+```
+
+## Parameters
+
+<ParamField path="stream" type="ReadableStream<Uint8Array>" required>
+  The ReadableStream obtained from `sandbox.readFileStream(path)`
+</ParamField>
+
+## Returns
+
+Returns an `AsyncGenerator` that:
+- **Yields**: `FileChunk` (either `string` for text files or `Uint8Array` for binary files)
+- **Returns**: `FileMetadata` when the stream completes
+
+<ResponseField name="FileChunk" type="string | Uint8Array">
+  Each chunk of the file
+  
+  - `string` - For text files (UTF-8 encoded)
+  - `Uint8Array` - For binary files (automatically decoded from base64)
+</ResponseField>
+
+<ResponseField name="FileMetadata" type="object">
+  Metadata about the file (returned when iteration completes)
+  
+  <ResponseField name="mimeType" type="string">
+    MIME type of the file (e.g., 'image/png', 'text/plain')
+  </ResponseField>
+  
+  <ResponseField name="size" type="number">
+    File size in bytes
+  </ResponseField>
+  
+  <ResponseField name="isBinary" type="boolean">
+    Whether the file is detected as binary
+  </ResponseField>
+  
+  <ResponseField name="encoding" type="'utf-8' | 'base64'">
+    Encoding used for the file content
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Stream a text file
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/large-log.txt');
+
+for await (const chunk of streamFile(stream)) {
+  if (typeof chunk === 'string') {
+    console.log('Text chunk:', chunk);
+    // Process each chunk without loading entire file
+  }
+}
+```
+
+### Stream a binary file
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/image.png');
+
+for await (const chunk of streamFile(stream)) {
+  if (chunk instanceof Uint8Array) {
+    console.log(`Binary chunk: ${chunk.length} bytes`);
+    // Process binary data in chunks
+  }
+}
+```
+
+### Get file metadata
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/file.pdf');
+const generator = streamFile(stream);
+
+// Process chunks
+for await (const chunk of generator) {
+  // Handle chunks...
+}
+
+// Get metadata after iteration completes
+// (Alternative: capture the return value using generator.next() pattern)
+```
+
+### Stream with metadata capture
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/data.json');
+const chunks: string[] = [];
+
+const generator = streamFile(stream);
+let result = await generator.next();
+
+while (!result.done) {
+  if (typeof result.value === 'string') {
+    chunks.push(result.value);
+  }
+  result = await generator.next();
+}
+
+const metadata = result.value; // FileMetadata
+console.log(`MIME type: ${metadata.mimeType}`);
+console.log(`Size: ${metadata.size} bytes`);
+```
+
+### Process image in chunks
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+const stream = await sandbox.readFileStream('/workspace/photo.jpg');
+const chunks: Uint8Array[] = [];
+
+for await (const chunk of streamFile(stream)) {
+  if (chunk instanceof Uint8Array) {
+    chunks.push(chunk);
+  }
+}
+
+// Combine chunks into single Uint8Array
+const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+const combined = new Uint8Array(totalLength);
+let offset = 0;
+for (const chunk of chunks) {
+  combined.set(chunk, offset);
+  offset += chunk.length;
+}
+```
+
+## Error Handling
+
+The generator throws an error if:
+- The file cannot be read
+- The stream is interrupted
+- Metadata is missing or invalid
+
+```typescript
+import { streamFile } from '@cloudflare/sandbox';
+
+try {
+  const stream = await sandbox.readFileStream('/workspace/file.txt');
+  for await (const chunk of streamFile(stream)) {
+    // Process chunks
+  }
+} catch (error) {
+  console.error('Stream error:', error.message);
+}
+```
+
+## Notes
+
+- Binary files are automatically detected and decoded from base64
+- Text files are streamed as UTF-8 strings
+- The generator pattern allows processing files larger than available memory
+- Early termination (breaking from the loop) properly cancels the stream
+
+## See Also
+
+- [readFileStream](/api/stream-file) - Get the ReadableStream for a file
+- [collectFile](/api/collect-file) - Read entire file from stream into memory
+- [readFile](/api/read-file) - Read entire file directly (not streaming)
