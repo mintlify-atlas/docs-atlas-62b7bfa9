@@ -150,7 +150,7 @@ const escaped = shellEscape(userInput);
 await sandbox.exec(`echo ${escaped}`);
 
 // Better: Use parameterized operations
-await sandbox.files.write('/output.txt', userInput);
+await sandbox.writeFile('/output.txt', userInput);
 ```
 
 ### Validate file paths
@@ -175,7 +175,7 @@ if (!isValidPath(userPath)) {
   return new Response('Invalid path', { status: 400 });
 }
 
-await sandbox.files.read(userPath);
+await sandbox.readFile(userPath);
 ```
 
 ### Validate port numbers
@@ -225,7 +225,7 @@ await sandbox.mountBucket('my-bucket', '/mnt/data', {
 await sandbox.exec(`export API_KEY=${shellEscape(env.API_KEY)}`);
 
 // Or write to secure file
-await sandbox.files.write('/.env', `API_KEY=${env.API_KEY}`, {
+await sandbox.writeFile('/.env', `API_KEY=${env.API_KEY}`, {
   mode: 0o600 // Read/write for owner only
 });
 
@@ -382,7 +382,7 @@ async function encryptData(data: string, key: CryptoKey) {
 
 // Store encrypted data in sandbox
 const encrypted = await encryptData(sensitiveData, env.ENCRYPTION_KEY);
-await sandbox.files.write('/secure/data.enc', encrypted);
+await sandbox.writeFile('/secure/data.enc', encrypted);
 ```
 
 ### Clean up sensitive data
@@ -390,7 +390,7 @@ await sandbox.files.write('/secure/data.enc', encrypted);
 ```typescript
 try {
   // Write temporary credentials
-  await sandbox.files.write('/tmp/creds.json', JSON.stringify(creds));
+  await sandbox.writeFile('/tmp/creds.json', JSON.stringify(creds));
   
   // Use credentials
   await sandbox.exec('app --credentials /tmp/creds.json');
@@ -537,7 +537,7 @@ const escaped = shellEscape(filename);
 await sandbox.exec(`cat ${escaped}`);
 
 // Better
-await sandbox.files.read(filename);
+await sandbox.readFile(filename);
 ```
 
 ### Path traversal
@@ -545,7 +545,7 @@ await sandbox.files.read(filename);
 ```typescript
 // Vulnerable
 const path = req.query.path; // "../../etc/passwd"
-await sandbox.files.read(`/workspace/${path}`);
+await sandbox.readFile(`/workspace/${path}`);
 
 // Fixed
 function sanitizePath(userPath: string): string {
@@ -555,7 +555,7 @@ function sanitizePath(userPath: string): string {
 }
 
 const safe = sanitizePath(path);
-await sandbox.files.read(safe);
+await sandbox.readFile(safe);
 ```
 
 ### Credential leakage

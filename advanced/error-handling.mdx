@@ -44,7 +44,7 @@ Every error includes:
 
 ```typescript
 try {
-  const content = await sandbox.files.read('/missing.txt');
+  const content = await sandbox.readFile('/missing.txt');
 } catch (error) {
   if (error instanceof FileNotFoundError) {
     console.error('Path:', error.path); // "/missing.txt"
@@ -56,11 +56,16 @@ try {
 
 ```typescript
 try {
-  await sandbox.files.write('/existing.txt', 'data', { overwrite: false });
+  // Check if file exists before writing
+  const exists = await sandbox.exists('/config.txt');
+  if (exists) {
+    console.log('File already exists');
+  } else {
+    await sandbox.writeFile('/config.txt', 'data');
+  }
 } catch (error) {
   if (error instanceof FileExistsError) {
     console.error('File exists:', error.path);
-    // Retry with overwrite: true
   }
 }
 ```
@@ -70,7 +75,7 @@ try {
 ```typescript
 try {
   // Default max: 10MB for read operations
-  await sandbox.files.read('/huge-file.bin');
+  await sandbox.readFile('/huge-file.bin');
 } catch (error) {
   if (error instanceof FileTooLargeError) {
     console.error('File too large:', error.path);
@@ -403,7 +408,7 @@ async function executeWithRetry(
 ```typescript
 async function readFileSafely(sandbox: Sandbox, path: string) {
   try {
-    return await sandbox.files.read(path);
+    return await sandbox.readFile(path);
   } catch (error) {
     if (error instanceof FileTooLargeError) {
       // Fallback to streaming read
@@ -488,7 +493,7 @@ try {
 
 ```typescript
 try {
-  await sandbox.files.read('/data/input.json');
+  await sandbox.readFile('/data/input.json');
 } catch (error) {
   if (error instanceof FileNotFoundError) {
     // Use structured context

@@ -174,8 +174,8 @@ const sandbox = getSandbox(env.SANDBOX, 'my-sandbox', {
 });
 
 // All operations share the connection
-await sandbox.files.read('/file1.txt');
-await sandbox.files.write('/file2.txt', 'data');
+await sandbox.readFile('/file1.txt');
+await sandbox.writeFile('/file2.txt', 'data');
 await sandbox.exec('ls');
 const processes = await sandbox.listProcesses();
 ```
@@ -434,7 +434,7 @@ const files = ['file1.txt', 'file2.txt', 'file3.txt', /* ... 100 files */];
 
 // Process all files over one WebSocket connection
 const results = await Promise.all(
-  files.map(file => sandbox.files.read(file))
+  files.map(file => sandbox.readFile(file))
 );
 ```
 
