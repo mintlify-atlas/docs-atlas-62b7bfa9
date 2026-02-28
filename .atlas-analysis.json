@@ -1,0 +1,204 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Cloudflare Sandbox SDK",
+  "projectDescription": "Build secure, isolated code execution environments on Cloudflare's edge network",
+  "theme": "aspen",
+  "primaryColor": "#F38020",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/sandbox-instances",
+              "concepts/command-execution",
+              "concepts/file-operations",
+              "concepts/sessions",
+              "concepts/processes",
+              "concepts/code-interpreter"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/executing-commands",
+              "guides/managing-files",
+              "guides/running-processes",
+              "guides/exposing-ports",
+              "guides/git-integration",
+              "guides/code-interpreter",
+              "guides/streaming-output",
+              "guides/backups-and-restore"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/sessions-and-state",
+              "advanced/bucket-mounting",
+              "advanced/websocket-transport",
+              "advanced/error-handling",
+              "advanced/performance-optimization",
+              "advanced/security-considerations"
+            ]
+          },
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/ai-code-execution",
+              "examples/openai-agents",
+              "examples/claude-code",
+              "examples/data-analysis",
+              "examples/ci-cd-pipeline",
+              "examples/collaborative-terminal"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/sandbox",
+              "api/get-sandbox",
+              "api/proxy-to-sandbox"
+            ]
+          },
+          {
+            "group": "Command Execution",
+            "pages": [
+              "api/exec",
+              "api/exec-stream",
+              "api/exec-interactive"
+            ]
+          },
+          {
+            "group": "File Operations",
+            "pages": [
+              "api/read-file",
+              "api/write-file",
+              "api/list-files",
+              "api/mkdir",
+              "api/remove-file",
+              "api/stream-file",
+              "api/collect-file"
+            ]
+          },
+          {
+            "group": "Process Management",
+            "pages": [
+              "api/start-process",
+              "api/list-processes",
+              "api/get-process",
+              "api/kill-process",
+              "api/wait-for-exit",
+              "api/wait-for-log"
+            ]
+          },
+          {
+            "group": "Port Management",
+            "pages": [
+              "api/expose-port",
+              "api/unexpose-port",
+              "api/list-ports",
+              "api/wait-for-port"
+            ]
+          },
+          {
+            "group": "Code Interpreter",
+            "pages": [
+              "api/code-interpreter/create-context",
+              "api/code-interpreter/run-code",
+              "api/code-interpreter/run-code-stream",
+              "api/code-interpreter/list-contexts",
+              "api/code-interpreter/delete-context"
+            ]
+          },
+          {
+            "group": "Git Operations",
+            "pages": [
+              "api/git-checkout"
+            ]
+          },
+          {
+            "group": "Sessions",
+            "pages": [
+              "api/create-session",
+              "api/delete-session",
+              "api/list-sessions"
+            ]
+          },
+          {
+            "group": "Backups",
+            "pages": [
+              "api/create-backup",
+              "api/restore-backup"
+            ]
+          },
+          {
+            "group": "Utility",
+            "pages": [
+              "api/ping",
+              "api/mount-bucket"
+            ]
+          },
+          {
+            "group": "Types",
+            "pages": [
+              "api/types/exec-result",
+              "api/types/process",
+              "api/types/code-context",
+              "api/types/execution",
+              "api/types/file-metadata",
+              "api/types/sandbox-options"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Secure container isolation on Cloudflare's edge",
+    "Command execution with streaming support",
+    "File system operations (read, write, list)",
+    "Background process management",
+    "Port exposure with preview URLs",
+    "Python/JavaScript code interpreter",
+    "Git repository integration",
+    "Session-based execution contexts",
+    "Backup and restore capabilities",
+    "WebSocket transport for efficient communication"
+  ],
+  "publicApiSurface": [
+    "getSandbox",
+    "Sandbox.exec",
+    "Sandbox.execStream",
+    "Sandbox.readFile",
+    "Sandbox.writeFile",
+    "Sandbox.listFiles",
+    "Sandbox.startProcess",
+    "Sandbox.exposePort",
+    "Sandbox.gitCheckout",
+    "Sandbox.createSession",
+    "Sandbox.mountBucket",
+    "CodeInterpreter.runCode",
+    "CodeInterpreter.createCodeContext",
+    "proxyToSandbox",
+    "streamFile",
+    "collectFile"
+  ]
+}
